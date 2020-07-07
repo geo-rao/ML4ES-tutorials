@@ -11,6 +11,7 @@ output:
 This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. You can execute each chunk of code by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.
 
 ## Step 0 - Initialization  
+
 Before we starts to read in the data and create our first classifier, we need to load libraries that will be used in the notebook. We will heavily rely on [**caret**](https://topepo.github.io/caret/index.html) library in R for model training. *caret* is a powerful wrapper package which calls hunders of machine learning packages in R and simplify model training and application process.  
 ```{r, message=FALSE, warning=FALSE}
 library(caret);                                                   # pacakge for ML model training
@@ -21,6 +22,7 @@ library(readr); library(dplyr);                                   # package for 
 ## Step 1 - Data ingest 
 
 First thing first, we will read in the data for this notebook which is included in this Github repository. The data file [*NC_L8_GroundTruth.csv*](https://github.com/geo-yrao/ML4ES-tutorials/blob/master/NC_L8_GroundTruth.csv) contains sampled pixels in western North Carolina. The data contains both the multispectral reflectance from Landsat-8 OLI data and corresponding land cover types from USGS Cropland Data Layer (CDL).
+
 ```{r, message= FALSE, warning = FALSE}
 ## Here, we read in the data pairs between reflectance (scale factor: 0.0001) and land cover types
 fname <- "~/NC_L8_GroundTruth.csv"
@@ -30,6 +32,7 @@ AVLData <- read_csv(fname)
 ## Step 2 - View data
 
 Our data contains the location (*"Latitude","Longitude"*), land cover type (*"Class"*), and reflectance of six OLI channels (*"B1"~"B6"*). Let's first check how the data frame looks like.
+
 ```{r, message = FALSE}
 ## We can show the first 10 rows of the data frame 
 head(AVLData, 10)
@@ -59,6 +62,7 @@ We want to understand how many samples belong to each land cover types. In our d
 |4|Water| 
 
 Here, we create a histogram to examing the histogram of land cover types in the data.  
+
 ```{r, warning=FALSE}
 # Show the histogram of different land cover types using ggplot2
 AVLData %>% ggplot() + geom_histogram(aes(Class), binwidth = 1, color="black", fill="forestgreen") +
@@ -71,6 +75,7 @@ As you can see, the data is overall well balanced across different land cover ty
 ## Step 4 - Simpilying to a binary example  
 
 As our first classifier, let's focus on a binary classifier example. So we only keep samples of forests (*Class == 0*) and water (*Class == 4*).
+
 ```{r, message=FALSE}
 ## We use filter function from dplyr to screen the data
 binData <- AVLData %>% filter(Class == 0 | Class == 4); str(binData);
@@ -82,6 +87,7 @@ As we can see, there are only **`r nrow(binData)`** samples for our binary case 
 ## Step 5 - Visualize data in the feature space  
 
 With the binary class example, we can examine the features (i.e., reflectance) that will be used for building the classifier. We use Channel 4 and 6 as an example. Please consider modify the code below to explore different feature combination.  
+
 ```{r, warning=FALSE}
 ## We use ggplot2 again here to plot the scatter plot of B4 and B6
 binData %>% ggplot(aes(x=B4,y=B6)) + geom_point(aes(color=Class), pch=21, size=2) + theme_bw() +
@@ -119,6 +125,7 @@ cowplot::plot_grid(p1,p2,p3, nrow=1, ncol=3)
 ```
 
 How would this splitting different from simple random spliting? Let's see the difference!  
+
 ```{r, fig.width=9, fig.height=4}
 set.seed(1001)
 nobs <- nrow(binData)  # this get the total number of samples
@@ -140,18 +147,22 @@ p3 <- testRand %>% ggplot() + geom_bar(aes(Class, y=..count../nrow(testRand)), c
 ## putting three plots together via cowplot
 cowplot::plot_grid(p1,p2,p3, nrow=1, ncol=3)
 ```
+
 We can see the difference on the relative frequency in our dataset, which is something that we want to avoid when we are handling our dataset. In extreme cases, the imbalance sample could lead to unreliable model training and/or testing results.
 
 ## Step 7 - K-nearest neighbor (k-NN)
 
 Now we have training and testing data ready, let's creat our first classifier, [**k-nearest neighbor (k-NN)**](https://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm). There are different variations of k-NN model which are developed to improve its performance for different challenging tasks. But here we will use the classic k-NN model. In *caret* package, the k-NN model is represented using the tag *"knn"*. In R, you can simply get the model information using the function *getModelInfo* provided by *caret* package.
+
 ```{r, warning=FALSE}
 ## check how to use function getModelInfo
 ? getModelInfo
 ## check the specifics of the model k-NN. Since there are many different variations of k-nn, we want to match the model tag exactly by turning off the regular expression match.
 getModelInfo(model="knn",regex=FALSE)
 ```
+
 This model information tells us that there is only one model hyperparameter need to be specified to train a k-NN model. To start with the model, we will simply use **k=10** for our first k-NN model without any cross-validation. In *caret*, the function **trainControl** compiles the model training process.
+
 ```{r, message=FALSE}
 set.seed(998)
 ## To start our model, we will fix k = 10 without cross validation
@@ -169,6 +180,7 @@ knnClassifier
 ## Step 8 - Generate confusion matrix  
 
 Just like that, we have our first k-NN classifier. How did our model do? We can find out using the confusion matrix.  
+
 ```{r, warning=FALSE}
 ## First, we can extract the predicted class of our k-nn (k=10) model
 predClass <- predict(knnClassifier)
@@ -180,12 +192,14 @@ cfMatrix
 ## Step 9 - Evaluate model using testing data  
 
 From the confusion matrix, it looks like that our first k-NN model did a decent job on separating these two classes with an accuracy of `r sprintf("%6.4f", cfMatrix$overall[1])`. But how would this model perform on the independent testing data that we set aside at the begining?  
+
 ```{r, warning=FALSE}
 ## Applying our k-NN model to our testData & generate confusion matrix for testing data
 knnTest <- predict(knnClassifier, newdata = testData)
 cfMatrixTest <- confusionMatrix(knnTest, testData$Class)
 cfMatrixTest
 ```
+
 It looks like the testing performance of our k-NN model is also very promissing with high accuracy (0.9257), which is not significantly different from 
 
 ## Step 10 - Cross-validation & Grid Search
@@ -229,7 +243,6 @@ cvMatrix <- confusionMatrix(knnCV)
 cvMatrix
 ```
 
-
 ## Step 13 - Apply and evaluate the final model
 
 Now we can apply this final model to our testing data to see if the optimized k value could improve the model performance.
@@ -243,9 +256,11 @@ testMatrix <- confusionMatrix(testOutcome, testData$Class)
 testMatrix
 ```
 
-We could compare the confusion matrix with the one that we generated earlier for our first k-NN model with *k* fixed as 10.  
+We could compare the confusion matrix with the one that we generated earlier for our first k-NN model with *k* fixed as 10.
+
 ```{r, warning=FALSE}
 ## This is our confusion matrix from the first k-NN model
 cfMatrixTest
 ```
+
 To conclude, the optimized k-NN model (k=8) via our cross-validation process yields better outcome than our first k-NN model when they were both evaluated using the independent testing data.  
