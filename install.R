@@ -1,2 +1,7 @@
 ## This file install required R packages for the tutorials when the repo is first binderized
-install.packages(c("readr","tidyr","ggplot2","caret","kknn","LiblineaR","dplyr","magrittr"))
+install.packages("readr")
+install.packages("rmarkdown")        
+install.packages("ggplot2")
+install.packages("caret")
+install.packages("cowplot")
+install.packages("dplyr")
