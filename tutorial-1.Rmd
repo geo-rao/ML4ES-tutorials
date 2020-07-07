@@ -12,10 +12,10 @@ This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute
 
 ## Step 0 - Initialization  
 Before we starts to read in the data and create our first classifier, we need to load libraries that will be used in the notebook. We will heavily rely on [**caret**](https://topepo.github.io/caret/index.html) library in R for model training. *caret* is a powerful wrapper package which calls hunders of machine learning packages in R and simplify model training and application process.  
-```{r}
+```{r, message=FALSE, warning=FALSE}
 library(caret);                                                   # pacakge for ML model training
 library(ggplot2); library(cowplot)                                # package for visualization
-library(readr); library(dplyr); library(tidyr); library(magrittr) # package for data handeling
+library(readr); library(dplyr);                                   # package for data handeling
 ```
 
 ## Step 1 - Data ingest 
