@@ -8,11 +8,15 @@ output:
     toc: yes
 ---
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. You can execute each chunk of code by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+You can execute each chunk of code by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.
 
 ## Step 0 - Initialization  
 
-Before we starts to read in the data and create our first classifier, we need to load libraries that will be used in the notebook. We will heavily rely on [**caret**](https://topepo.github.io/caret/index.html) library in R for model training. *caret* is a powerful wrapper package which calls hunders of machine learning packages in R and simplify model training and application process.  
+Before we starts to read in the data and create our first classifier, we need to load libraries that will be used in the notebook. We will heavily rely on 
+[**caret**](https://topepo.github.io/caret/index.html) library in R for model training. *caret* is a powerful wrapper package which calls hunders of machine 
+learning packages in R and simplify model training and application process.
+
 ```{r, message=FALSE, warning=FALSE}
 library(caret);                                                   # pacakge for ML model training
 library(ggplot2); library(cowplot)                                # package for visualization
@@ -21,7 +25,8 @@ library(readr); library(dplyr);                                   # package for 
 
 ## Step 1 - Data ingest 
 
-First thing first, we will read in the data for this notebook which is included in this Github repository. The data file [*NC_L8_GroundTruth.csv*](https://github.com/geo-yrao/ML4ES-tutorials/blob/master/NC_L8_GroundTruth.csv) contains sampled pixels in western North Carolina. The data contains both the multispectral reflectance from Landsat-8 OLI data and corresponding land cover types from USGS Cropland Data Layer (CDL).
+First thing first, we will read in the data for this notebook which is included in this Github repository. The data file [*NC_L8_GroundTruth.csv*](https://github.com/geo-yrao/ML4ES-tutorials/blob/master/NC_L8_GroundTruth.csv) 
+contains sampled pixels in western North Carolina. The data contains both the multispectral reflectance from Landsat-8 OLI data and corresponding land cover types from USGS Cropland Data Layer (CDL).
 
 ```{r, message= FALSE, warning = FALSE}
 ## Here, we read in the data pairs between reflectance (scale factor: 0.0001) and land cover types
@@ -31,14 +36,16 @@ AVLData <- read_csv(fname)
 
 ## Step 2 - View data
 
-Our data contains the location (*"Latitude","Longitude"*), land cover type (*"Class"*), and reflectance of six OLI channels (*"B1"~"B6"*). Let's first check how the data frame looks like.
+Our data contains the location (*"Latitude","Longitude"*), land cover type (*"Class"*), and reflectance of six OLI channels (*"B1"~"B6"*). 
+Let's first check how the data frame looks like.
 
 ```{r, message = FALSE}
 ## We can show the first 10 rows of the data frame 
 head(AVLData, 10)
 ```
 
-The following table present the information about the six [OLI chanles](https://en.wikipedia.org/wiki/Landsat_8) included in the data. The reflectance data can provide unique information to charaterize different land cover types.
+The following table present the information about the six [OLI chanles](https://en.wikipedia.org/wiki/Landsat_8) included in the data. 
+The reflectance data can provide unique information to charaterize different land cover types.
 
 | Channel No. | Channel Name | Wavelength |
 |-:|-:|:-:|
@@ -82,11 +89,13 @@ binData <- AVLData %>% filter(Class == 0 | Class == 4); str(binData);
 ## To facilitate the classifier development, we convert the data type of Class from integer to factor in R
 binData$Class <- factor(binData$Class, levels = c(0,4), labels = c("Forest", "Water"))
 ```
+
 As we can see, there are only **`r nrow(binData)`** samples for our binary case instead of all **`r nrow(AVLData)`** samples.
 
 ## Step 5 - Visualize data in the feature space  
 
-With the binary class example, we can examine the features (i.e., reflectance) that will be used for building the classifier. We use Channel 4 and 6 as an example. Please consider modify the code below to explore different feature combination.  
+With the binary class example, we can examine the features (i.e., reflectance) that will be used for building the classifier. We use Channel 4 and 6 as an example. 
+Please consider modify the code below to explore different feature combinations (e.g., B2 v.s. B6).  
 
 ```{r, warning=FALSE}
 ## We use ggplot2 again here to plot the scatter plot of B4 and B6
@@ -97,7 +106,8 @@ binData %>% ggplot(aes(x=B4,y=B6)) + geom_point(aes(color=Class), pch=21, size=2
 
 ## Step 6 - Data splitting
 
-To build our first machine learning model, we first need to **split the data** into different sets for model development and evaluation (i.e., model development and testing). Let's follow the convention ratio of data seperation -- 80% model development and 20% testing. We will implement cross validation in the training using the model development dataset. 
+To build our first machine learning model, we first need to **split the data** into different sets for model development and evaluation (i.e., model development and testing).
+Let's follow the convention ratio of data seperation -- 80% model development and 20% testing. We will implement cross validation in the training using the model development dataset. 
 
 There are different ways to implement data splitting. In our case, we want to make sure that both classes are well represented in both data sets. Idealy, we want our data set can reflect on the "reality" so we will use stratified spliting.
 
@@ -148,11 +158,14 @@ p3 <- testRand %>% ggplot() + geom_bar(aes(Class, y=..count../nrow(testRand)), c
 cowplot::plot_grid(p1,p2,p3, nrow=1, ncol=3)
 ```
 
-We can see the difference on the relative frequency in our dataset, which is something that we want to avoid when we are handling our dataset. In extreme cases, the imbalance sample could lead to unreliable model training and/or testing results.
+We can see the difference on the relative frequency in our dataset, which is something that we want to avoid when we are handling our dataset. In extreme cases, 
+the imbalance sample could lead to unreliable model training and/or testing results.
 
 ## Step 7 - K-nearest neighbor (k-NN)
 
-Now we have training and testing data ready, let's creat our first classifier, [**k-nearest neighbor (k-NN)**](https://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm). There are different variations of k-NN model which are developed to improve its performance for different challenging tasks. But here we will use the classic k-NN model. In *caret* package, the k-NN model is represented using the tag *"knn"*. In R, you can simply get the model information using the function *getModelInfo* provided by *caret* package.
+Now we have training and testing data ready, let's creat our first classifier, [**k-nearest neighbor (k-NN)**](https://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm). 
+There are different variations of k-NN model which are developed to improve its performance for different challenging tasks. But here we will use the classic k-NN model. 
+In *caret* package, the k-NN model is represented using the tag *"knn"*. In R, you can simply get the model information using the function *getModelInfo* provided by *caret* package.
 
 ```{r, warning=FALSE}
 ## check how to use function getModelInfo
@@ -161,7 +174,8 @@ Now we have training and testing data ready, let's creat our first classifier, [
 getModelInfo(model="knn",regex=FALSE)
 ```
 
-This model information tells us that there is only one model hyperparameter need to be specified to train a k-NN model. To start with the model, we will simply use **k=10** for our first k-NN model without any cross-validation. In *caret*, the function **trainControl** compiles the model training process.
+This model information tells us that there is only one model hyperparameter need to be specified to train a k-NN model. To start with the model, we will simply use **k=10** 
+for our first k-NN model without any cross-validation. In *caret*, the function **trainControl** compiles the model training process.
 
 ```{r, message=FALSE}
 set.seed(998)
@@ -204,7 +218,10 @@ It looks like the testing performance of our k-NN model is also very promissing 
 
 ## Step 10 - Cross-validation & Grid Search
 
-It is unlikely that our first guess of k will yield the best model. That's when we need to use cross-validation for hyperparameter (i.e., *k* for k-NN) tuning. To do so, we just need to modify our *trainControl* function. There are many different tuning methods that can be specified in [*trainControl*](https://topepo.github.io/caret/model-training-and-tuning.html#model-training-and-parameter-tuning). The basic cross-validation is specified as `"cv"` by __*caret*__ library. Also, you need to determine how many folds of cross-validation that you want to perform, which is specified as `"number"` in the *trainControl* function. To search the best *k* for our model, let's explore the range from 2 to 15 with the increment of 1.
+It is unlikely that our first guess of k will yield the best model. That's when we need to use cross-validation for hyperparameter (i.e., *k* for k-NN) tuning. To do so, 
+we just need to modify our *trainControl* function. There are many different tuning methods that can be specified in [*trainControl*](https://topepo.github.io/caret/model-training-and-tuning.html#model-training-and-parameter-tuning). 
+The basic cross-validation is specified as `"cv"` by __*caret*__ library. Also, you need to determine how many folds of cross-validation that you want to perform, 
+which is specified as `"number"` in the *trainControl* function. To search the best *k* for our model, let's explore the range from 2 to 15 with the increment of 1.
 
 ```{r, warning=FALSE}
 ## here, we modify the trainControl function to use 5-fold cross-validation 
@@ -224,7 +241,8 @@ knnCV
 
 ## Step 11 - Visualize CV results  
 
-Based on the cross-validation result, the *train* function decide to choose 8 as the optimum value for the k-nn because it yields the highest accuracy. But let's visualize it using accuracy as the metric. 
+Based on the cross-validation result, the *train* function decide to choose 8 as the optimum value for the k-nn because it yields the highest accuracy. But let's visualize 
+it using accuracy as the metric. 
 
 ```{r, message=FALSE}
 ## We can plot the accuracy as a function of different k values to assist our selection of the hyperparameter
@@ -263,4 +281,5 @@ We could compare the confusion matrix with the one that we generated earlier for
 cfMatrixTest
 ```
 
-To conclude, the optimized k-NN model (k=8) via our cross-validation process yields better outcome than our first k-NN model when they were both evaluated using the independent testing data.  
+To conclude, the optimized k-NN model (k=8) via our cross-validation process yields better outcome than our first k-NN model when they were both evaluated using the 
+independent testing data.  
