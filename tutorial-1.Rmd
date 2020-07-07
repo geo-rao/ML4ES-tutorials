@@ -25,8 +25,9 @@ library(readr); library(dplyr);                                   # package for 
 
 ## Step 1 - Data ingest 
 
-First thing first, we will read in the data for this notebook which is included in this Github repository. The data file [*NC_L8_GroundTruth.csv*](https://github.com/geo-yrao/ML4ES-tutorials/blob/master/NC_L8_GroundTruth.csv) 
-contains sampled pixels in western North Carolina. The data contains both the multispectral reflectance from Landsat-8 OLI data and corresponding land cover types from USGS Cropland Data Layer (CDL).
+First thing first, we will read in the data for this notebook which is included in this Github repository. The data file contains sampled pixels in western North Carolina
+[*NC_L8_GroundTruth.csv*](https://github.com/geo-yrao/ML4ES-tutorials/blob/master/NC_L8_GroundTruth.csv). The data contains both the multispectral reflectance from Landsat-8 
+OLI data and corresponding land cover types from USGS Cropland Data Layer (CDL).
 
 ```{r, message= FALSE, warning = FALSE}
 ## Here, we read in the data pairs between reflectance (scale factor: 0.0001) and land cover types
@@ -107,9 +108,11 @@ binData %>% ggplot(aes(x=B4,y=B6)) + geom_point(aes(color=Class), pch=21, size=2
 ## Step 6 - Data splitting
 
 To build our first machine learning model, we first need to **split the data** into different sets for model development and evaluation (i.e., model development and testing).
-Let's follow the convention ratio of data seperation -- 80% model development and 20% testing. We will implement cross validation in the training using the model development dataset. 
+Let's follow the convention ratio of data seperation -- 80% model development and 20% testing. We will implement cross validation in the training using the model development
+dataset. 
 
-There are different ways to implement data splitting. In our case, we want to make sure that both classes are well represented in both data sets. Idealy, we want our data set can reflect on the "reality" so we will use stratified spliting.
+There are different ways to implement data splitting. In our case, we want to make sure that both classes are well represented in both data sets. Idealy, we want our data set
+can reflect on the "reality" so we will use stratified spliting.
 
 ```{r, fig.width=9, fig.height=4}
 ## spliting the data based on the outcome -- land cover type; 80% for modeling, 20% for testing.
@@ -165,7 +168,8 @@ the imbalance sample could lead to unreliable model training and/or testing resu
 
 Now we have training and testing data ready, let's creat our first classifier, [**k-nearest neighbor (k-NN)**](https://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm). 
 There are different variations of k-NN model which are developed to improve its performance for different challenging tasks. But here we will use the classic k-NN model. 
-In *caret* package, the k-NN model is represented using the tag *"knn"*. In R, you can simply get the model information using the function *getModelInfo* provided by *caret* package.
+In *caret* package, the k-NN model is represented using the tag *"knn"*. In R, you can simply get the model information using the function *getModelInfo* provided by 
+*caret* package.
 
 ```{r, warning=FALSE}
 ## check how to use function getModelInfo
@@ -205,7 +209,8 @@ cfMatrix
 
 ## Step 9 - Evaluate model using testing data  
 
-From the confusion matrix, it looks like that our first k-NN model did a decent job on separating these two classes with an accuracy of `r sprintf("%6.4f", cfMatrix$overall[1])`. But how would this model perform on the independent testing data that we set aside at the begining?  
+From the confusion matrix, it looks like that our first k-NN model did a decent job on separating these two classes with an accuracy of 0.9543.
+But how would this model perform on the independent testing data that we set aside at the begining?  
 
 ```{r, warning=FALSE}
 ## Applying our k-NN model to our testData & generate confusion matrix for testing data
