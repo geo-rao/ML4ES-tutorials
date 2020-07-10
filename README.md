@@ -7,4 +7,4 @@ This is the tutorials repo for Machine Learning for Earth Sciences (ML4ES). To l
 
 3. You can modify the code in the R notebook while you are exploring the tutorials. However, the change will not be saved in the virtual environment. In order to save your change, you can download the modified notebook to your local environment for your personal use.
 
-Launch binder in RStudio: [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/geo-yrao/ML4ES-tutorials/master?urlpath=rstudio)
+Using the notebook in RStudio: [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/geo-yrao/ML4ES-tutorials/master?urlpath=rstudio)
