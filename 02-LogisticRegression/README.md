@@ -1,0 +1,1 @@
+This folder contains the notebooks for logistic regression models for binary class classification using Landsat-8 data for western North Carolina. The notebooks also demonstrates the impact of regularization.
