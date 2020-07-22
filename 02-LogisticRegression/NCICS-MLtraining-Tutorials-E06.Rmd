@@ -1,0 +1,349 @@
+---
+title: "NCICS Machine Learning Tutorial - E06"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. You can execute each chunk of code by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.
+
+## Introduction  
+
+### Session purpose
+In this session, we are introducing logistic regression for classification. The concept of regularization will also be introduced in this session.
+
+### Session contents
+In this session, we will be covering the following topics:
+
+1. Data Standardization;
+2. Logistic regression classifier;
+3. Regularization;
+4. Impact of hyperparameters on model;
+
+### About the data set  
+The data set is actual satellite imagery of our home city of Asheville, taken from Landsat 8, an imaging satellite that was launched in 2013.
+
+Check out the following links for more information: https://www.usgs.gov/land-resources/nli/landsat/landsat-8?qt-science_support_page_related_con=0#qt-science_support_page_related_con
+
+https://landsat.gsfc.nasa.gov/landsat-data-continuity-mission/ 
+
+Before we starts to read in the data and create our first classifier, we need to load libraries that will be used in the notebook. We will heavily rely on [**caret**](https://topepo.github.io/caret/index.html) library in R for model training. *caret* is a powerful wrapper package which calls hunders of machine learning packages in R and simplify model training and application process.  
+
+```{r initialization, message=FALSE}
+library(caret); library(e1071)                                    # pacakge for ML model training
+library(ggplot2); library(cowplot)                                # package for visualization
+library(readr); library(dplyr)                                    # package for data handeling
+```
+
+## 1 - Review of the data  
+
+In this tutorial, we are still using the same dataset that we used during our previous training on land cover classification for Asheville area. Instead of going through each step in details, we will just do a quick review of the data.  
+
+### 1.1 - Data ingest 
+
+First thing first, we will read in the data for this notebook which is included in this Github repository. The data file [*NC_L8_GroundTruth.csv*](https://github.com/geo-yrao/ML4ES-tutorials/blob/master/01-Data/NC_L8_GroundTruth.csv) contains sampled pixels in western North Carolina. The data contains both the multispectral reflectance from Landsat-8 OLI data and corresponding land cover types from USGS Cropland Data Layer (CDL). We can see the first 10 lines of the data. Our data contains the location (*"Latitude","Longitude"*), land cover type (*"Class"*), and reflectance of six OLI channels (*"B1"~"B6"*). Let's first check how the data frame looks like.
+
+```{r, message= FALSE, warning = FALSE}
+## Here, we read in the data pairs between reflectance (scale factor: 0.0001) and land cover types
+# fname <- "~/00-Data/NC_L8_GroundTruth.csv"
+fname <- "~/MLtraining/noaa-ai-ml-distribution-raju/lulc-ashville/NC_L8_GroundTruth.csv"
+AVLData <- read_csv(fname); head(AVLData, 10)
+```
+
+The following table present the information about the six [OLI chanles](https://en.wikipedia.org/wiki/Landsat_8) included in the data. The reflectance data can provide unique information to charaterize different land cover types.
+
+| Channel No. | Channel Name | Wavelength |
+|-:|-:|:-:|
+|B1|Coastal/Areasol|0.433 – 0.453 μm| 
+|B2|Blue|0.450 – 0.515 μm|
+|B3|Green|0.525 – 0.600 μm|
+|B4|Red|0.630 – 0.680 μm|
+|B5|Near Infrared|0.845 – 0.885 μm|
+|B6|Short Wavelength Infrared|1.560 – 1.660 μm|  
+
+In our data, there are five different land cover types as listed in the table below.  
+
+| Class No. | Land Cover Type |
+|-:|-:|
+|0|Forest| 
+|1|Corn|
+|2|Soy|
+|3|Development/Urban|
+|4|Water| 
+
+Here, we create a histogram to examing the histogram of land cover types in the data.  
+```{r, warning=FALSE}
+# Show the histogram of different land cover types using ggplot2
+AVLData %>% ggplot() + geom_histogram(aes(Class), binwidth = 1, color="black", fill="forestgreen") +
+  labs(x="Land Cover Type", y="No. of Samples") + coord_cartesian(ylim=c(0,550), xlim=c(-0.75,4.75), expand=F) +
+  theme_bw() + theme(text=element_text(size=15))
+```
+
+As you can see, the data is overall well balanced across different land cover types except for forest (*Class == 0*). 
+
+### 1.2 - Simpilying to a binary example  
+
+Here, we still focus on the binary classification problem for **forest** (*Class == 0*) and **water** (*Class == 4*).  
+
+```{r, message=FALSE}
+## We use filter function from dplyr to screen the data
+binData <- AVLData %>% filter(Class == 0 | Class == 4); str(binData);
+## To facilitate the classifier development, we convert the data type of Class from integer to factor in R
+binData$Class <- factor(binData$Class, levels = c(0,4), labels = c("Forest", "Water"))
+
+## spliting the data based on the outcome -- land cover type; 80% for modeling, 20% for testing.
+set.seed(6302)
+trainIndex <- createDataPartition(binData$Class, p=0.8, list=FALSE, times = 1)
+trainData <- binData[trainIndex,]; testData <- binData[-trainIndex,]
+```
+As we can see, there are only **875** samples for our binary case.  
+
+### 1.3 - Examine the range of features  
+
+Here, we want to check the range of various features (i.e., spectral refelctances) for both classes to see if any feature show notably different data range.  
+
+```{r range-check, warning=FALSE}
+## using summary() function to examine the range of all sixe OLI channels
+binData %>% select(Class, B1:B6) %>% summary()
+
+```
+
+From this summary table, we can clearly see that **B5** and **B6** show wider data range comparing to the other four bands. In this particular case, this data range difference may not have big impacts on our final classification results. But if there are large magnitude differences amongst your model inputs, it can lead to problematic model outcomes. The input with largest magnitude sometimes can dictates the final model performance if there are no measures to address this issue.  
+
+For example, let's assume one of our model input is surface air temperature in the unit of Kelvin (K) and the other input is surface specific humidity in the unit of kilogram per kilogram (kg/kg). The typical range of temperature over land could be between 210 K ~ 340 K while the specific humidty varies in the order of one thousandth kg/kg. The seven order of magnitude differences could mean that specific humidity has no impact in the final model if used as it is. That's why we need to perform data standardization.  
+
+## 2 - Data Standardization  
+
+### 2.1 - Using *preProcess()* function
+
+Typically, we standardize the data using the mean value and standard deviation from the data set. In **caret** package, this can be simply implemented using the 
+function *preProcess()*. This function can also be used to perform other data transformations, such as, principle component analysis (PCA), indepedent component 
+analysis (ICA), etc.  
+
+```{r preProcess, warning=FALSE, message=FALSE}
+
+## first, we can check the function preProcess
+? preProcess
+
+## According to the documentation, we can specify "center" and "scale" in method to perform the standardization
+## Using preProcess function to standardize the data but ignoring Latitude and Longitude
+prePrco <- trainData %>% select(-X1, -Latitude, -Longitude) %>% preProcess(., method = c("center", "scale"))
+
+## Now, let's see the result of this standardization
+prePrco
+print("Mean values of six OLI channels:  ")
+print(prePrco$mean)
+print("Standard deviation of six OLI channels:  ")
+print(prePrco$std)
+
+## One unique thing about preProcess function is that it only creates a "model" for data preprocessing.
+## It will only be executed once you apply this model to your data. So, it can be easily implemented to
+## both current data for model development and future independent data for model evaluation.
+
+train_Standardized <- predict(prePrco, newdata=trainData)
+test_Standardized <- predict(prePrco, newdata=testData)
+
+## Let's check the first 10 rows of the transformed data set
+head(train_Standardized, 10)
+
+```
+
+As we can see, the *preProcess()* function not only performed standardization for six OLI channels it also preserved the mean and standard deviation used for the process. 
+This is very important so this set of parameters can be applied for future testing data sets.  
+
+### 2.2 - Visualize transformed feature space  
+
+Now, let's put the original features and transformed features together.  
+
+```{r vis-standardization, warning=FALSE, message=FALSE, fig.width=9, fig.height=9}
+
+### This is our script to visualize the original feature space for training data (80%)
+p1 <- trainData %>% ggplot(aes(x=B4,y=B6)) + geom_point(aes(color=Class), pch=21, size=2) + theme_bw() +
+  coord_cartesian(xlim=c(0, 3500), ylim=c(0, 3500), expand=F) + 
+  scale_color_manual(values = c("forestgreen", "royalblue")) + labs(x = "Band 4", y = " Band 6") +
+  labs(title = "Original Feature Space (Training)") + theme(text=element_text(size=13), legend.position = c(0.2,0.85))
+
+### This is our script to visualize the transformed feature space for training data (80%)
+p2 <- train_Standardized %>% ggplot(aes(x=B4,y=B6)) + geom_point(aes(color=Class), pch=21, size=2) + theme_bw() +
+  coord_cartesian(xlim=c(-2, 4), ylim=c(-2, 4), expand=F) + 
+  scale_color_manual(values = c("forestgreen", "royalblue")) + labs(x = "Band 4", y = " Band 6") +
+  labs(title = "Transformed Feature Space (Training)") + theme(text=element_text(size=13), legend.position = "none")
+
+### This is our script to visualize the original feature space for testing data (20%)
+p3 <- testData %>% ggplot(aes(x=B4,y=B6)) + geom_point(aes(color=Class), pch=21, size=2) + theme_bw() +
+  coord_cartesian(xlim=c(0, 3500), ylim=c(0, 3500), expand=F) + 
+  scale_color_manual(values = c("forestgreen", "royalblue")) + labs(x = "Band 4", y = " Band 6") +
+  labs(title = "Original Feature Space (Testing)") + theme(text=element_text(size=13), legend.position = c(0.2,0.85))
+
+### This is our script to visualize the transformed feature space for testing data (20%)
+p4 <- test_Standardized %>% ggplot(aes(x=B4,y=B6)) + geom_point(aes(color=Class), pch=21, size=2) + theme_bw() +
+  coord_cartesian(xlim=c(-2, 4), ylim=c(-2, 4), expand=F) + 
+  scale_color_manual(values = c("forestgreen", "royalblue")) + labs(x = "Band 4", y = " Band 6") +
+  labs(title = "Transformed Feature Space (Testing)") + theme(text=element_text(size=13), legend.position = "none")
+
+### Putting all four figures together
+cowplot::plot_grid(p1,p2,p3,p4, nrow=2, ncol=2)
+
+```
+
+We can see the difference on the relative frequency in our dataset, which is something that we want to avoid when we are handling our dataset. In extreme cases, the imbalance sample could lead to unreliable model training and/or testing results.
+
+## 3 - Logistic regression  
+
+In this section, we are building the logistic regression model for our binary classification problem. In logistic regression, we can choose different forms of regularlization
+to avoid overfitting issue. In **caret** package, there are different variations of logistic regression. We will be using the classic one with the model tag of *"regLogistic"*.
+
+### 3.1 - Get model information  
+
+```{r get-mod-info, warning=FALSE}
+## check the specifics of the model regularlized logistic regression. 
+## Since there are many different variations, we want to match the model tag exactly by turning off the regular expression match.
+getModelInfo(model="regLogistic",regex=FALSE)
+```
+
+This model information tells us that there are three hyperparameters can be adjusted for a regularlized logistic regression.  
+  1. __"lost"__ controls the form of regularization function. We can choose from _"L1"_, _"L2_dual"_, and _"L2_primal"_;  
+  2. __"epsilon"__ determines the tolerence (maximum level) of error for model convergence;  
+  3. __"cost"__ modulates the cost of violating the constraints for the data. It Rules the trade-off between regularization and correct classification.    
+
+### 3.2 - Train the model via cross validation  
+
+In this section, let us begin training the regularized logistic regression model for our forest/water classification case by tuning two
+hyperparameters - _"loss"_ and _"epsilon"_.   
+
+```{r regLog-cv, message=FALSE}
+set.seed(998)
+
+## trainControl function in R sepecifies whether and how to train your model
+LogControl <- trainControl(method = "cv", number=10, classProbs = TRUE) 
+
+## here we specify the parameter grid that we want to search for the optimum model
+## we have three different regularization functions, 10 different epsilon values
+
+parGrid <- expand.grid(loss = c("L1", "L2_primal", "L2_dual"), cost = 1,
+                       epsilon = c(0.001,0.002,0.005,0.01,0.02,0.04,0.06,0.08,0.1))
+
+## We are now training our model using the standardized data
+LogClassifier <- train(Class ~ B1 + B2 + B3 + B4 + B5 + B6, data = trainData, 
+                       tuneGrid = parGrid, method = "regLogistic", 
+                       trControl = LogControl, preProcess = c("center", "scale"))
+
+LogClassifier
+```
+
+Now, let's try to visualize the cross validation results by creating a level plot (heatmap) of classification accuracies versus the combinatin of both model hyperparameters.
+This plot could help us decide which set of model parameters yield the optimum logistic regression model for our binary class classification.
+
+trellis.par.set(caretTheme())
+plot(LogClassifier, metric = "Accuracy", plotType = "level", cuts=100,
+     pretty=TRUE,
+     scales = list(x = list(rot = 90)), col.regions = heat.colors(100))
+```
+
+Based on this 10-fold cross validation, it looks like the L1 regularization yileds the best performance when espilon is small (i.e., 0.001).
+
+Now, let's check how this model performs by looking at the confusion matrix.  
+
+```{r cfmatrix, warning=FALSE, message=FALSE, fig.width=9, fig.height=4}
+## This line of code calculates the confusion matrix for the cross validation results
+LogCV_Matrix <- confusionMatrix(LogClassifier)
+
+## The output of confusionMatrix() is a list containing both the matrix and other quantitative indicators
+## Let's just keep the normalised matrix for future comparison since all other indicators can be calculated
+## from the matrix
+LogCV_Matrix_normalised <- as.data.frame(LogCV_Matrix$table)
+LogCV_Matrix_normalised
+## apply the model to test data before calculating the confusion matrix for the testing data
+LogPredicted <- predict(LogClassifier, newdata = testData)
+
+## Create confusion matrix for the testing data
+LogTest_Matrix <- confusionMatrix(LogPredicted, testData$Class)
+LogTest_Matrix_normalised <- as.data.frame(LogTest_Matrix$table/sum(LogTest_Matrix$table))
+
+## put the two confusion matrices side-by-side for comparison
+log_p1 <- ggplot(data = LogCV_Matrix_normalised, aes(x = Prediction , y =  Reference, fill = Freq))+
+        geom_tile() + scale_fill_gradient(limits=c(0,55), low = "white", high = "forestgreen",
+                                          labels=as.character(seq(10,50,10)), breaks=seq(10,50,10)) +
+        scale_y_discrete(limits = unique(rev(LogCV_Matrix_normalised$Reference))) +
+        geom_text(aes(label = sprintf("%.1f",Freq)), color = 'Black', size = 8) +
+        theme_light() + coord_cartesian(expand=F) + theme(text=element_text(size=12))+
+        labs(title="Normalised Confusion Matrix \n(Logistic Regression - 10-fold CV)")
+log_p2 <- ggplot(data = LogTest_Matrix_normalised, aes(x = Prediction , y =  Reference, fill = Freq))+geom_tile() + 
+        scale_fill_gradient(limits=c(0,0.55),low = "white", high = "forestgreen", 
+                            labels=as.character(seq(10,50,10)), breaks=seq(0.1,0.5,0.1)) +
+        scale_y_discrete(limits = unique(rev(LogTest_Matrix_normalised$Reference))) +
+        geom_text(aes(label = sprintf("%.1f",Freq*100)), color = 'Black', size = 8) +
+        theme_light() + coord_cartesian(expand=F) + theme(text=element_text(size=12))+
+        labs(title="Normalised Confusion Matrix \n(Logistic Regression - Testing)")
+
+cowplot::plot_grid(log_p1, log_p2, nrow=1, ncol=2)
+
+```
+
+## 4 - Comparing with k-nearest neighbors  
+
+Now we have built two models to address the same question -- a binary class classification for distinguish forest and water using 
+Landsat-8 OLI data. Let's put the results from both models together to see if there is any difference in the model performance.  
+
+### 4.1 - Review of our k-NN model  
+
+From our previous tutorial, we have decided that **k=7** yields the best classification result for forest/water classification based on
+10-fold cross-validation. Now, let's rebuild this k-NN model anc creates the confusion matrix again.  
+
+```{r kNN-matrix, warning=FALSE, message=FALSE}
+
+## building the model using k=7
+knnControl <- trainControl(method="none", classProbs = TRUE)
+knnClassifier <- train(Class ~ B1 + B2 + B3 + B4 + B5 + B6, data = trainData, method = "knn", 
+                       trControl = knnControl, tuneGrid = data.frame(k=7))
+
+## create confusion matrix for training
+knnPredicted <- predict(knnClassifier, newdata = trainData)
+knnTrain_Matrix <- confusionMatrix(knnPredicted, trainData$Class)
+knnTrain_Matrix_normalised <- as.data.frame(knnTrain_Matrix$table/sum(knnTrain_Matrix$table))
+
+## This is the confusion matrix for k-NN (training)
+knnTrain_Matrix
+
+## Create confusion matrix for testing 
+knnPredicted <- predict(knnClassifier, newdata = testData)
+knnTest_Matrix <- confusionMatrix(knnPredicted, testData$Class)
+knnTest_Matrix_normalised <- as.data.frame(knnTest_Matrix$table/sum(knnTest_Matrix$table))
+
+## This is the confusion matrix for k-NN (testing)
+knnTest_Matrix
+```
+
+### 4.2 - Comparing between k-NN and logistic regression  
+
+Now let's put everything together between k-NN and logistc regression.  
+
+```{r cf-comparison, warning=FALSE, message=FALSE, fig.width=9, fig.height=8}
+## using ggplot to create heatmap for knn outcomes
+## put the two confusion matrices side-by-side for comparison
+knn_p1 <- ggplot(data = knnTrain_Matrix_normalised, aes(x = Prediction , y =  Reference, fill = Freq))+
+        geom_tile() + scale_fill_gradient(limits=c(0,0.55),low = "white", high = "salmon", 
+                            labels=as.character(seq(10,50,10)), breaks=seq(0.1,0.5,0.1)) +
+        scale_y_discrete(limits = unique(rev(knnTrain_Matrix_normalised$Reference))) +
+        geom_text(aes(label = sprintf("%.1f",Freq*100)), color = 'Black', size = 8) +
+        theme_light() + coord_cartesian(expand=F) + theme(text=element_text(size=12))+
+        labs(title="Normalised Confusion Matrix \n(k-NN - Training)")
+knn_p2 <- ggplot(data = knnTest_Matrix_normalised, aes(x = Prediction , y =  Reference, fill = Freq))+geom_tile() + 
+        scale_fill_gradient(limits=c(0,0.55),low = "white", high = "salmon", 
+                            labels=as.character(seq(10,50,10)), breaks=seq(0.1,0.5,0.1)) +
+        scale_y_discrete(limits = unique(rev(knnTest_Matrix_normalised$Reference))) +
+        geom_text(aes(label = sprintf("%.1f",Freq*100)), color = 'Black', size = 8) +
+        theme_light() + coord_cartesian(expand=F) + theme(text=element_text(size=12))+
+        labs(title="Normalised Confusion Matrix \n(k-NN - Testing)")
+  
+cowplot::plot_grid(log_p1, log_p2, knn_p1, knn_p2, nrow=2, ncol=2)
+```
+
+From this comparison, it looks like both k-NN and logistic regression model shows same performances on our
+independent testing data. Considering the two classes that we are identifying (i.e., forest and water) are easy 
+to separate because their unique spectral features (see the scatte plot before), most of the models can do a decent 
+job for this task. But will this still be the case if we move on to more complicated tasks, such as, multi-class 
+classification? We will move on to these in our next training session.
