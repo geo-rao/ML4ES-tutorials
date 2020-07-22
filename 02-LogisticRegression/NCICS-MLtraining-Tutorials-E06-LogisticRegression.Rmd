@@ -238,6 +238,7 @@ LogClassifier
 Now, let's try to visualize the cross validation results by creating a level plot (heatmap) of classification accuracies versus the combinatin of both model hyperparameters.
 This plot could help us decide which set of model parameters yield the optimum logistic regression model for our binary class classification.
 
+```{r vis-cv, warning=FALSE, message=FALSE}
 trellis.par.set(caretTheme())
 plot(LogClassifier, metric = "Accuracy", plotType = "level", cuts=100,
      pretty=TRUE,
