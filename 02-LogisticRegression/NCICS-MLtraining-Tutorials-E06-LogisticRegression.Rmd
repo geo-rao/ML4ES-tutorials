@@ -13,7 +13,8 @@ This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute
 ## Introduction  
 
 ### Session purpose
-In this session, we are introducing logistic regression for classification. The concept of regularization will also be introduced in this session.
+In this session, we are introducing logistic regression for classification. The concept of regularization will also be introduced in this session. We will continue to use 
+the land cover classification example for Asheville.  
 
 ### Session contents
 In this session, we will be covering the following topics:
@@ -21,7 +22,6 @@ In this session, we will be covering the following topics:
 1. Data Standardization;
 2. Logistic regression classifier;
 3. Regularization;
-4. Impact of hyperparameters on model;
 
 ### About the data set  
 The data set is actual satellite imagery of our home city of Asheville, taken from Landsat 8, an imaging satellite that was launched in 2013.
@@ -33,14 +33,15 @@ https://landsat.gsfc.nasa.gov/landsat-data-continuity-mission/
 Before we starts to read in the data and create our first classifier, we need to load libraries that will be used in the notebook. We will heavily rely on [**caret**](https://topepo.github.io/caret/index.html) library in R for model training. *caret* is a powerful wrapper package which calls hunders of machine learning packages in R and simplify model training and application process.  
 
 ```{r initialization, message=FALSE}
-library(caret); library(e1071)                                    # pacakge for ML model training
+library(caret); library(e1071); library(LiblineaR)                # pacakge for ML model training
 library(ggplot2); library(cowplot)                                # package for visualization
 library(readr); library(dplyr)                                    # package for data handeling
 ```
 
 ## 1 - Review of the data  
 
-In this tutorial, we are still using the same dataset that we used during our previous training on land cover classification for Asheville area. Instead of going through each step in details, we will just do a quick review of the data.  
+In this tutorial, we are still using the same dataset that we used during our previous training on land cover classification for Asheville area. Instead of going through 
+each step in details, we will just do a quick review of the data.  
 
 ### 1.1 - Data ingest 
 
@@ -48,12 +49,12 @@ First thing first, we will read in the data for this notebook which is included 
 
 ```{r, message= FALSE, warning = FALSE}
 ## Here, we read in the data pairs between reflectance (scale factor: 0.0001) and land cover types
-# fname <- "~/00-Data/NC_L8_GroundTruth.csv"
-fname <- "~/MLtraining/noaa-ai-ml-distribution-raju/lulc-ashville/NC_L8_GroundTruth.csv"
+fname <- "~/00-Data/NC_L8_GroundTruth.csv"
 AVLData <- read_csv(fname); head(AVLData, 10)
 ```
 
-The following table present the information about the six [OLI chanles](https://en.wikipedia.org/wiki/Landsat_8) included in the data. The reflectance data can provide unique information to charaterize different land cover types.
+The following table present the information about the six [OLI chanles](https://en.wikipedia.org/wiki/Landsat_8) included in the data. The reflectance data can provide 
+unique information to charaterize different land cover types.
 
 | Channel No. | Channel Name | Wavelength |
 |-:|-:|:-:|
