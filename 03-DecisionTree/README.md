@@ -2,4 +2,6 @@ This folder contains the tutorial notebooks for decision tree and principle comp
 
 Using notebook in RStudio environment: [Insert badge for binder]
 
-Using notebook in R + Jupyter environment: [Insert badge for binder]
+Using notebook in R + Jupyter environment: [Insert badge for binder]  
+
+Using notebook in Python + Jupyter environment: [Insert badge for Colab]
