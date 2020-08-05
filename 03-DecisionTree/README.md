@@ -1,7 +1,7 @@
 This folder contains the tutorial notebooks for decision tree and principle component analysis (PCA).
 
-Using notebook in RStudio environment: [Insert badge for binder]
+Using the notebook in RStudio: [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/geo-yrao/ML4ES-tutorials/master?urlpath=rstudio)  
 
-Using notebook in R + Jupyter environment: [Insert badge for binder]  
+Using the notebook in Jupyter+R: [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/geo-yrao/ML4ES-tutorials/master)
 
-Using notebook in Python + Jupyter environment: [Insert badge for Colab]
+Using notebook in Google Colab: (coming soon)
