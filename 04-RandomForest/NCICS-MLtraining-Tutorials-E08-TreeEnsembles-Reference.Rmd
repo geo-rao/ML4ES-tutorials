@@ -1,0 +1,432 @@
+---
+title: "NCICS Machine Learning Tutorial - E08 (Reference)"
+output:
+  html_notebook:
+    toc: yes
+  html_document:
+    df_print: paged
+    toc: yes
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, 
+the results appear beneath the code. You can execute each chunk of code by clicking the *Run* button within 
+the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.
+
+## Introduction  
+
+### Session purpose
+In this session, we are introducing ensemble models based on the decision tree model -- random forest and 
+eXtreme Gradient Boosting tree (XGBoost). This is the reference notebook with complete solutions for all 
+sections.
+
+### Session contents
+In this session, we will be covering the following topics:
+
+1. Implementation of Random Forest in R;
+2. Implementation of XGBoost in R;
+
+### About the data set  
+The data set is actual satellite imagery of our home city of Asheville, taken from Landsat 8, an imaging 
+satellite that was launched in 2013.
+
+Check out the following links for more information: https://www.usgs.gov/land-resources/nli/landsat/landsat-8?qt-science_support_page_related_con=0#qt-science_support_page_related_con
+
+https://landsat.gsfc.nasa.gov/landsat-data-continuity-mission/ 
+
+Before we starts to read in the data and create our first classifier, we need to load libraries that will
+be used in the notebook. We will heavily rely on [**caret**](https://topepo.github.io/caret/index.html) 
+library in R for model training. *caret* is a powerful wrapper package which calls hunders of machine 
+learning packages in R and simplify model training and application process.  
+
+```{r initialization, message=FALSE}
+library(caret); library(ranger); library(xgboost)                 # pacakge for ML model training
+library(ggplot2); library(cowplot); library(rattle)               # package for visualization
+library(readr); library(dplyr)                                    # package for data handeling
+```
+
+## 1 - Review of the data  
+
+In this tutorial, we are still using the same dataset that we used during our previous training on land 
+cover classification for Asheville area. Instead of going through each step in details, we will just do 
+a quick review of the data.  
+
+First thing first, we will read in the data for this notebook which is included in this Github repository.
+The data file [*NC_L8_GroundTruth.csv*](https://github.com/geo-yrao/ML4ES-tutorials/blob/master/01-Data/NC_L8_GroundTruth.csv) 
+contains sampled pixels in western North Carolina. The data contains both the multispectral reflectance 
+from Landsat-8 OLI data and corresponding land cover types from USGS Cropland Data Layer (CDL). We can see
+the first 10 lines of the data. Our data contains the location (*"Latitude","Longitude"*), land cover type
+(*"Class"*), and reflectance of six OLI channels (*"B1"~"B6"*). Let's first check how the data frame looks like.
+
+```{r, message= FALSE, warning = FALSE}
+## Here, we read in the data pairs between reflectance (scale factor: 0.0001) and land cover types
+fname <- "~/00-Data/NC_L8_GroundTruth.csv"
+AVLData <- read_csv(fname); head(AVLData, 10)
+```
+
+The following table present the information about the six [OLI chanles](https://en.wikipedia.org/wiki/Landsat_8) 
+included in the data. The reflectance data can provide unique information to charaterize different land cover types.
+
+| Channel No. | Channel Name | Wavelength |
+|-:|-:|:-:|
+|B1|Coastal/Areasol|0.433 – 0.453 μm| 
+|B2|Blue|0.450 – 0.515 μm|
+|B3|Green|0.525 – 0.600 μm|
+|B4|Red|0.630 – 0.680 μm|
+|B5|Near Infrared|0.845 – 0.885 μm|
+|B6|Short Wavelength Infrared|1.560 – 1.660 μm|  
+
+In our data, there are five different land cover types as listed in the table below.  
+
+| Class No. | Land Cover Type |
+|-:|-:|
+|0|Forest| 
+|1|Corn|
+|2|Soy|
+|3|Development/Urban|
+|4|Water| 
+
+In this tutorials, we merge the two crop types (i.e., corn and soy) together to form a new class as "Crop" 
+considering that they have quite similar spectral features which might lead to misclassification between them.  
+```{r, warning=FALSE}
+## Create a new variable for merged_class while preserve the original class label from data
+## Merge corn and soy into crop class (with code = 12) and conver it to a factor
+AVLData$merged_class <- factor(if_else((AVLData$Class == 1 | AVLData$Class == 2), 12, AVLData$Class),
+                               levels = c(0,12,3,4), labels = c("Forest", "Crop", "Urban", "Water"))
+
+# Show the histogram of different land cover types using ggplot2
+AVLData %>% ggplot() + geom_bar(aes(merged_class), color="black", fill="forestgreen") +
+  labs(x="Land Cover Type", y="No. of Samples") + coord_cartesian(ylim=c(0,1150), expand=F) +
+  theme_bw() + theme(text=element_text(size=15))
+```
+
+```{r data-partition, warning=FALSE, message=FALSE}
+## We are now spliting the data set into training and testing data set
+trainIndex <- createDataPartition(AVLData$merged_class, p=0.8, list=FALSE, times = 1)
+
+## 80% data is for training while 20% data is for independent testing
+trainData <- AVLData[trainIndex,]; testData <- AVLData[-trainIndex,]
+
+```
+
+## 2 - Implementation of Random Forest  
+
+The Random Forest model is an evolution of the decision tree model that we learned in [earlier session](https://github.com/geo-yrao/ML4ES-tutorials/tree/master/03-DecisionTree).
+The random forest is an ensemble learning model by creating a suite of decision trees at training 
+time and outputting the class that is the majority of the classes from each individual tree for 
+classification problem. The fundamental idea of random forest model is that the collective power 
+of multiple "weak" decision tree models can outperform any individual "strong" model. It can address
+overfitting issue comparing to the regular decision tree model.  
+
+You can find more details describing the basics of random forest from the [wekipedia page](https://en.wikipedia.org/wiki/Random_forest) 
+or this [blog post by Will Koehrsen](https://medium.com/@williamkoehrsen/random-forest-simple-explanation-377895a60d2d).  
+
+There are different flavors of random forest model. We are using the classic random forest model 
+with *caret* package with the tag *"ranger"*. As the model gets more complicated, we have more to 
+consider about the model structure, such as, the number of decision trees in the forest (*num.trees*), 
+maximum number of features to be considered as input for each tree (*mtry*), the maximum depth of a 
+decision tree (*max.depth*), and the list goes on. To find out the details of individual hyperparameter,
+there is no better place than the description page of the [function to implment the model *ranger*](https://www.rdocumentation.org/packages/ranger/versions/0.12.1/topics/ranger).
+
+Although there are different hyperparameters to tune, *caret* packge prioritize three of them for *ranger* 
+model -- *mtry*, *min.node.size*, and *splitrule*, in its built-in grid search. But today, we are focusing
+on two hyperparameters that will be consistent between the R notebook and Python notebook -- *num.trees* 
+and *max.depth*. So we are doing some leg work by modifying the predefined *ranger* model in *caret* library.  
+
+```{r ranger-model, message=FALSE, warning=FALSE}
+### First, we get the original *ranger* model information from *caret* package  
+### using function getModelInfo()
+rangerDefult <- getModelInfo(model = "ranger", regex = FALSE)[[1]]
+
+### the rangerOld provides the detailed information of how we want caret to deal with the model
+### and we can simply modify the component of oldModel$ranger$fit to change the behavior of caret
+print("This is the current 'ranger$fit':")
+print(rangerDefult$fit)
+
+### In this part, you can see that caret only specify we will tune *mtry*, *min.node.size*,
+### and *splitrule* for ranger. We can simply change that by adding two more hyperparameters
+### by simply change this fit component
+rangerCustom <- rangerDefult
+rangerCustom$parameters = data.frame(parameter = c("mtry", "splitrule", "min.node.size", 
+                                                   "num.trees", "max.depth"),
+                                     class = c("numeric", "character", "numeric",
+                                               "numeric", "numeric"),
+                                     label = c("#Randomly Selected Predictors",
+                                               "Splitting Rule",
+                                               "Minimal Node Size",
+                                               "Number of trees",
+                                               "Maximum tree depth"))
+rangerCustom$fit <- function(x, y, wts, param, lev, last, classProbs, ...) {
+                      if((!is.data.frame(x))||dplyr::is.tbl(x)) x <- as.data.frame(x, stringsAsFactors = TRUE)
+                      x$.outcome <- y
+                      if(!is.null(wts)) {
+                        out <- ranger::ranger(dependent.variable.name = ".outcome",
+                                              data = x,
+                                              num.trees =  param$num.trees,
+                                              max.depth =  max(param$max.depth, 0), 
+                                              mtry = min(param$mtry, ncol(x)),
+                                              min.node.size = param$min.node.size,
+                                              splitrule = as.character(param$splitrule),
+                                              write.forest = TRUE,
+                                              probability = classProbs,
+                                              case.weights = wts,
+                                              ...)
+                      } else {
+                        out <- ranger::ranger(dependent.variable.name = ".outcome",
+                                              data = x,
+                                              num.trees =  param$num.trees,
+                                              max.depth =  max(param$max.depth, 0), 
+                                              mtry = min(param$mtry, ncol(x)),
+                                              min.node.size = param$min.node.size,
+                                              splitrule = as.character(param$splitrule),
+                                              write.forest = TRUE,
+                                              probability = classProbs,
+                                              ...)
+                      }
+                      ## in case the resampling method is "oob"
+                      if(!last) out$y <- y
+                      out
+                    }
+
+### So now, we can simply use our newly defined model struture with caret package to 
+### implement our hyperparameter tuning using the model tag "rangerCustom"
+```
+
+This cutomized model definition can be a really useful functionality when you are trying to modify
+existing model that is compatible with *caret* package or you are developing your own machine learning
+model but still want to take advantage of the *caret* package such as preprocessing, grid search, etc.
+More details and examples of how to customize your model with *caret* package can be found [here](https://topepo.github.io/caret/using-your-own-model-in-train.html).   
+
+Now, we can move on with our tutorial to train our random forest model with the customized model tag
+"rangerCustom". But first, let's define the hyperparameter grids we want to search through!
+
+```{r define-param-grid, warning=FALSE, message=FALSE}
+### First, let's define the hyperparameter grid we want to search through using function expand.grid()
+### num.trees = 25, 50, 100, 200
+### max.depth = 5, 10, 50, 0 (0 means unlimited tree depth for ranger)
+### We will fix other hyperparameters as its default value
+### mtry = 5
+### splitrule = "gini"
+### min.node.size = 1 
+paraGrid <- expand.grid(
+    mtry = 5,
+    splitrule = "gini",
+    min.node.size = 1,
+    num.trees = c(25, 50, 100, 200), 
+    max.depth = c(5, 10, 50, 0)
+)
+
+### Now we should have 16 different combinations of hyperparameters to search through
+str(paraGrid)
+```
+
+After defining the hyperparameter grids that we want to search through, we will use a 5-fold cross 
+validation to tune our random forest model using the training dataset.
+
+```{r rfmodel-training, message=FALSE, fig.asp=1, fig.height=14}
+### To specify that we want to do 5-fold CV, we need to use the function trainControl() from *caret*.
+rfCtrl <- trainControl(method="cv", number=5, search="grid")
+
+### Once we defined the rfCtrl, we will pass this information as well as the hyperparameter grids that 
+### we already defined to function train() to build our model 
+rfClassifier <- train(merged_class ~ B1 + B2 + B3 + B4 + B5 + B6, 
+                      data = trainData,
+                      method = rangerCustom, 
+                      trControl = rfCtrl, 
+                      tuneGrid = paraGrid)
+print("Complete model training for customized ranger model...")
+print(rfClassifier)
+```
+
+The result of hyperparameter tuning tells us that the optimum model structure is a random forest
+model with 100 trees and maximum tree depth of 10. We can visualize the results.  
+
+```{r visualize-rf-tuning, message=FALSE}
+### we can see the average performance of the cross validation via confusion matrix
+confusionMatrix(rfClassifier)
+
+### We can plot the accuracy as a function of different max.depth and num.trees to assist 
+### our selection of the hyperparameter
+trellis.par.set(caretTheme())  ## here, we set the them for the plot
+plot(rfClassifier) 
+```
+
+Now, we have our random forest model and it can be applied to our hold-out testing dataset to evaluate
+the performance of our model.  
+```{r rfmodel-eval, warning=FALSE, error=FALSE}
+### We can predict the class from our rfClassifier using function predict() by specifying 
+### what data we are using via "newdata = ..."
+predictedClass <- predict(rfClassifier, newdata = testData)
+
+### Let's calculate the confusion matrix using this predicted class and reference class from
+### our test data
+rfConfusionMatrix <- confusionMatrix(predictedClass, testData$merged_class)
+
+print(rfConfusionMatrix)
+```
+
+With random forest, we can easily examine the importance of our features used in the model based on 
+the impurity value. This can be easily implemented b yspecifying the argument of "importance='impurity'"
+during training process since by default *ranger* will not return such information.  
+
+```{r rf-varImp, warning=FALSE}
+### In this part, we are looking at the variable importance of the random forest model
+### that we created. So we will directly train the model again using the optimum hyperparameter sets
+### without cross validation.
+### num.trees = 100, max.depth = 10, mtry = 5, min.node.size= 1, splitrule= "gini"
+paraOpt = data.frame(num.trees=100, max.depth=10, mtry=5, min.node.size=1, splitrule="gini")
+trCtrl  = trainControl(method="none")
+rfClassifier = train(merged_class ~ B1 + B2 + B3 + B4 + B5 + B6,
+                     data = trainData, trControl = trCtrl,
+                     method = rangerCustom, importance="impurity",
+                     tuneGrid = paraOpt)
+varImp(rfClassifier)
+```
+
+### 3 - Implement eXtreme Gradient Boosting (XGBoost)  
+
+eXtreme Gradient Boosting (XGBoost) is one of the implementation of gradient boosting model family that 
+was proposed by [Leo Breiman in 1997](https://statistics.berkeley.edu/sites/default/files/tech-reports/486.pdf) 
+and [Jerome Friedman in 1999](https://statweb.stanford.edu/~jhf/ftp/trebst.pdf). The fundamental idea of
+gradient boosting is to view it as an optimization problem by reducing the model error through a sequential
+"weak" models, usually decision trees. 
+
+From the simple description, you may already sense the difference between random forest model family and 
+gradient boosting model family even though they are all based on decision tree model. The random forest model 
+creates an ensemble of independent decision tree models (parallelly) while the gradient boosting model creats 
+an ensemble of stage-wise decision tree models (sequentially). Each stage (decision tree) within the gradient
+boosting model is trying to account for model errors from previous stage.
+
+XGBoost is an open source software package developed by [Tianqi Chen](https://arxiv.org/abs/1603.02754) 
+and has been included in all major programing languages (e.g., C++, Java, Python, R, Julia, Perl, etc.)
+It has been the crown jewel in recent data science competitions because of it efficiency and superior performance 
+([see some examples](https://github.com/dmlc/xgboost/tree/master/demo#machine-learning-challenge-winning-solutions)).
+The fundamental idea of XGBoost is to create a scalable, portable, and distributed gradient boosting tool.
+There are more detailed tutorials on how to use XGBoost on their own [community page.](https://xgboost.readthedocs.io/en/latest/R-package/index.html#tutorials)
+
+For us, we will implement XGBoost via its iterface with *caret* in R and compre the final model performance with
+the random forest model we created. The model tag for XGBoost using decision tree is *"xgbTree"*. The superior 
+performance of *xgbooost* does come at a price -- with even more hyperparameter to consider, such as learning 
+rate (*eta*), maximum depth (*max_depth*), regularization, etc. You can find a complete list of hyperparemeters
+that can be changed in R in [this documentation](https://github.com/dmlc/xgboost/blob/master/doc/parameter.rst).
+
+```{r xgboost-parameter, warning=FALSE}
+### Even though there are many parameters that we can change, but to compare with random forest model
+### we will only perform grid search on two -- number of boosting iterations (equivlent to
+### number of trees in random forest) and maximum depth
+### nrounds = 25, 50, 100, 200
+### max_depth = 5, 10, 50, 0
+### eta = 0.3 (default learning rate)
+### gamma = 0 (default minimum loss reduction required to make a further partition on a leaf node of the tree)
+### colsample_bytree = 1 (default subsample ratio of columns when constructing each tree)
+### min_child_weight = 1 (default minimum sum of instance weight (hessian) needed in a child)
+### subsample = 1 (default subsample ratio of the training instances)
+paraGrid <- expand.grid(nrounds = c(25, 50, 100, 200),
+                        max_depth = c(5, 10, 50),
+                        eta = 0.3,
+                        gamma = 0,
+                        colsample_bytree = 1,
+                        min_child_weight = 1,
+                        subsample = 1)
+
+### We have 15 combinations of hyperparameter grids for our cross validation
+str(paraGrid)
+```
+Now, we will move on to train our XGBoost tree model using function *caret::train()* and *caret::trainControl()*.  
+
+```{r xgboost-trainning, warning=FALSE}
+### define the 5-fold cross validation using trainControl() function
+xgbCtrl <- trainControl(method="cv", number=5, search="grid")
+
+### innitiate model training with XGBoost (and we only use one processor for the training)
+xgbClassifier <- train(merged_class ~ B1 + B2 + B3+ B4+ B5 + B6, data = trainData,
+                       method = "xgbTree", trControl = xgbCtrl, 
+                       nthread=1, tuneGrid = paraGrid) 
+
+print("Complete XGBoost model training ...")
+print(xgbClassifier)
+```
+
+You might noticed that the trianing for tree-based ensemble models (both random forest and XGBoost) is typically
+longer than our previous model training process (e.g., kNN, decision tree, logistic regression). This is because 
+these ensemble models usually builds hunderds of models at the back end (hunderds of decision tree models in this 
+case). So it will require more computational resources. So be mindful when you are setting the hyperparameter space
+for model training.  
+
+Now, with the final model training completed, we can examine the model performance via the confusion matrix and 
+visualze the hyperparameter tuning results.  
+
+```{r xgboost-vis, warning=FALSE}
+### First let's look at the confusion matrix for the XGBoost model
+confusionMatrix(xgbClassifier)
+
+### We can plot the variations of the overall accuracy along different values of our hyperparameters
+trellis.par.set(caretTheme())  ## here, we set the them for the plot
+plot(xgbClassifier) 
+```
+
+Now, we have our final XGBoost tree model and we can apply it to the testing data and compare with our random
+forest model.  
+
+```{r xgboost-eval, warning=FALSE}
+### We can predict the class from our xgbClassifier using function predict() by specifying 
+### what data we are using via "newdata = ..."
+predictedClass <- predict(xgbClassifier, newdata = testData)
+
+### Let's calculate the confusion matrix using this predicted class and reference class from
+### our test data
+xgbConfusionMatrix <- confusionMatrix(predictedClass, testData$merged_class)
+
+print(xgbConfusionMatrix)
+```
+
+Now let's bring two confusion matrix side-by-side to compare the performance of these two models.  
+```{r confMatrix-comparison, warning=FALSE}
+### The original confusion matrix is in the format of a table. We will use ggplot to visulize 
+### the confusion matrix as a heatmap, so we will slightly modify the confusion matrix into a 
+### data frame
+rfCM.df  <- as.data.frame(rfConfusionMatrix$table) ;  str(rfCM.df)
+xgbCM.df <- as.data.frame(xgbConfusionMatrix$table);  str(xgbCM.df)
+
+### Create the heatmap for random forest confusion matrix
+rfHM <- ggplot(data=rfCM.df, aes(Reference, Prediction, fill=Freq)) +
+  geom_tile() + theme_bw() + coord_equal() +
+  scale_fill_distiller(palette="Greens", direction=1) +
+  guides(fill=F) + # removing legend for `fill`
+  labs(title = "Random Forest Confusion Matrix") + # using a title instead
+  geom_text(aes(label=Freq), color="black") # printing values
+
+### Create the heatmap for XGBoosting confusion matrix
+xgbHM <- ggplot(data=xgbCM.df, aes(Reference, Prediction, fill=Freq)) +
+  geom_tile() + theme_bw() + coord_equal() +
+  scale_fill_distiller(palette="Greens", direction=1) +
+  guides(fill=F) + # removing legend for `fill`
+  labs(title = "XGBoosting Confusion Matrix") + # using a title instead
+  geom_text(aes(label=Freq), color="black") # printing values
+
+cowplot::plot_grid(rfHM, xgbHM, nrow=1, ncol=2)
+```
+
+From this comparison plot of the confusion matrix, it is hard to find significant differences between 
+both random forest and XGBoost model in this case. This is largely because of the data is highly distinguishable
+between these four classes. Both model can achieve similarly good performance. The distinguition will be 
+more evident when we face more challenging tasks in the future sessions.  
+
+### Bonus Exercise - Isolating Impact of Hyperparameters
+
+You have now successfully built both random forest model and XGBoosting model. To simplify the training process,
+we only selected two hyperparameters to tune in earlier steps. I encourage you to examine the impact of 
+different hyperparameters separately. This can help you understand which hyperparameter might be more influential
+to your model performance. You can choose either random forest model or XGBoosting model to do this exercise
+in the code chunk below where I have provided some comments on how to do it.  
+
+```{r bonus-exercise, warning=FALSE}
+### To examine the impact of model hyperparameter separately, you can fix all other hyperparameters
+### but the one that you want to study.
+### For example, learning rate *eta* for XGBoosting can be very important to decide your training 
+### efficiency and model performance. You can fix all other hyperparameters and modify learning rate
+### in your parameter grids to see how it may affect your model performance by ploting the cross-
+### validation results like we have done before.
+### You can repeat this process for any hyperparameters that you want to investigate.
+
+
+```
