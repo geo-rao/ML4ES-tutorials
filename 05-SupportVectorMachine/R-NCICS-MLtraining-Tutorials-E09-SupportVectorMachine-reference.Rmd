@@ -1,0 +1,404 @@
+---
+title: "NCICS Machine Learning Tutorial - E09 (Reference)"
+output:
+  html_notebook:
+    toc: yes
+  html_document:
+    df_print: paged
+    toc: yes
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, 
+the results appear beneath the code. You can execute each chunk of code by clicking the *Run* button within 
+the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.
+
+## Introduction  
+
+### Session purpose
+In this session, we are introducing support vector machine (SVM) for regression applications. It is also 
+called support vector regression (SVR). Before diving into details about SVR, you should know that SVM 
+can also be used for classification applications with the same procedure of SVR.
+
+### Learning outcome
+After going through this tutorial, you will be able to
+
+1. Handle a tabular dataset with missing values for regression applications;
+2. Implement support vector machine for regression applications;
+3. Understand the concept of kernal transformation in SVM.
+
+## 1 - Review the data  
+
+```{r load-library}
+library(kernlab); library(caret)
+library(dplyr); library(magrittr); library(ggplot2)
+```
+
+We are using the quality controlled daily station observations from US Climate Reference Network (USCRN). 
+In this notebook, we will use the data of Asheville station with nearly 20 years of data. First, let's read 
+in the data from the CSV (comma separated variable) file from [our repository](https://github.com/geo-yrao/ML4ES-tutorials/tree/master/00-Data/USCRN-data).
+
+```{r read-in-uscrn, warning = FALSE, error = FALSE}
+## Define the file name of the CSV file
+fname <- "../00-Data/USCRN-data/USCRN-NC_Asheville_8_SSW_2001-2019.csv"
+
+## Read in the RAW daily data
+RawData <- read.csv(fname)
+
+## Check the column names of the tabular data
+print ( colnames(RawData) )
+```
+
+From the column names, we see that there are 28 different variables in this tabular data.
+What does each column means? It is all documented in the [readme file](https://github.com/geo-yrao/ML4ES-tutorials/blob/master/00-Data/USCRN-data/USCRN_Daily_Data_readme.txt).
+
+* _**WBANNO**_: The station WBAN number.
+* _**LST_DATE**_: The Local Standard Time (LST) date of the observation (YYYYMMDD).
+* _**CRX_VN**_: The version number of the station datalogger program.
+* _**LONGITUDE**_: Station longitude, using WGS-84 (unit: decimal_degrees_east).
+* _**LATITUDE**_: Station latitude, using WGS-84 (unit: decimal_degrees_north).
+* _**T_DAILY_MAX**_: Maximum air temperature (unit: Celsius).
+* _**T_DAILY_MIN**_: Minimum air temperature (unit: Celsius).
+* _**T_DAILY_MEAN**_: Mean air temperature calculated using maximum and minimum temperature (unit: Celsius).
+* _**T_DAILY_AVG**_: Average air temperature calculated using sub-hourly temperature (unit: Celsius).
+* _**P_DAILY_CALC**_: Total amount of precipitation (unit: mm).
+* _**SOLARAD_DAILY**_: Total solar energy (unit: MJ/m^2^).
+* _**SUR_TEMP_DAILY_TYPE**_: Type of infrared surface temperature measurement.
+* _**SUR_TEMP_DAILY_MAX**_: Maximum infrared surface temperature(unit: Celsius).
+* _**SUR_TEMP_DAILY_MIN**_: Minimum infrared surface temperature (unit: Celsius).
+* _**SUR_TEMP_DAILY_AVG**_: Average infrared surface temperature (unit: Celsius).
+* _**RH_DAILY_MAX**_: Maximum relative humidity (unit: %).
+* _**RH_DAILY_MIN**_: Minimum relative humidity (unit: %).
+* _**RH_DAILY_AVG**_: Average relative humidity (unit: %).
+* _**SOIL_MOISTURE_5_DAILY**_: Average soil moisture at 5 cm below the surface (unit: m^3^/m^3^).
+* _**SOIL_MOISTURE_10_DAILY**_: Average soil moisture at 10 cm below the surface (unit: m^3^/m^3^).
+* _**SOIL_MOISTURE_20_DAILY**_: Average soil moisture at 20 cm below the surface (unit: m^3^/m^3^).
+* _**SOIL_MOISTURE_50_DAILY**_: Average soil moisture at 50 cm below the surface (unit: m^3^/m^3^).
+* _**SOIL_MOISTURE_100_DAILY**_: Average soil moisture at 100 cm below the surface (unit: m^3^/m^3^).
+* _**SOIL_TEMP_5_DAILY**_: Average soil temperature at 5 cm below the surface (unit: Celsius).
+* _**SOIL_TEMP_10_DAILY**_: Average soil temperature at 10 cm below the surface (unit: Celsius).
+* _**SOIL_TEMP_20_DAILY**_: Average soil temperature at 20 cm below the surface (unit: Celsius).
+* _**SOIL_TEMP_50_DAILY**_: Average soil temperature at 50 cm below the surface (unit: Celsius).
+* _**SOIL_TEMP_100_DAILY**_: Average soil temperature at 100 cm below the surface (unit: Celsius).
+
+In this notebook, we focus on the problem of estimating the average soil moisture at 20 cm below the 
+surface (_**SOIL_MOISTURE_20_DAILY**_) using other meteorological variables. To keep the model simple,
+we just use the daily average (or total) of air temperature, precipitation, solar energy, surface 
+temperature, and relative humidity as the model input. Therefore, we need to simplify our current 
+tabular data to only keep necessary variables.  
+
+```{r slim-data, warning=FALSE, error=FALSE}
+### we only keep part of the variables
+library(dplyr); library(magrittr)
+
+## In addition to the input variables, we kept date to help us separate the data for training/testing
+SlimData <- RawData %>% select ( c(2, 9, 10, 11, 15, 18, 21) )
+
+## Check the first & last 10 rows of the data
+head(SlimData, 10) 
+tail(SlimData, 10)
+```
+
+We can see that there are missing values in both the independent variables and dependent variables in the 
+current data set. Let's see how many missing values exist in the current data set.  
+
+```{r check-missing}
+## Summarize the missing value
+missingSum <- SlimData %>% 
+  select_if(function(x) any(is.na(x))) %>%           ## Check if the column contains missing value
+  summarise_all(funs(sum(is.na(.)/length(.)*100)))   ## if so, then count what percent of the data is missing
+
+missingSum %>% knitr::kable()
+```
+
+It appears that there is ~48% of data records has missing value for the soil moisture. To proceed with 
+model development, we will only keep the complete daily data records in this notebook. In the future, 
+we will introduce how to impute missing values for more complex model development.  
+
+```{r filter-missing}
+CleanData <- SlimData %>% filter(!is.na(T_DAILY_AVG), !is.na(P_DAILY_CALC),
+                                 !is.na(SOLARAD_DAILY), !is.na(SUR_TEMP_DAILY_AVG),
+                                 !is.na(RH_DAILY_AVG), !is.na(SOIL_MOISTURE_20_DAILY))
+
+str(CleanData)
+```
+
+Right now, the *LST_DATE* variable is in the format of integer. We need to transform it into the 
+specific format for datetime in R so we can perform time based filtering for training/testing data 
+spliting.  
+
+```{r formate-date}
+## Convert data type for LST_DATE to Date in R following the format "YYYY-MM-DD"
+CleanData$LST_DATE <- as.Date(as.character(CleanData$LST_DATE), format="%Y%m%d")
+str(CleanData)
+
+## You will see the data type for LST_DATE has been changed into "Date"
+## with this data type, we can easily filter data by observation date for train/test data spliting
+
+## Let's use the data between 2010 and 2017 (8 years) for training our model
+## then, use the data of 2018 and 2019 for model evaluation
+trainData <- CleanData %>% filter(LST_DATE <= "2017-12-31"); dim(trainData)
+testData  <- CleanData %>% filter(LST_DATE >= "2018-01-01"); dim(testData)
+```
+
+We now have two different data sets for model development (*trainData*) and model evaluation (*testData*)
+seperately.
+
+**Cautionary note**: when we split the data into two based on year, there is the underlying assumption 
+that we believe the *trainData* (2010-2017) comes from the same statistical distribution with the *testData*
+(2018-2019). In other words, the dataset used for model development could mostly represent the scenarios
+that may appear in the dataset for model evaluation. But if there are future extreme events that is beyond the
+range of *trainData*, we need to treat the prediction carefully since it could have large uncertainties.  
+
+## 2 - Building a support verctor regression model  
+
+The [support vector machine](https://en.wikipedia.org/wiki/Support_vector_machine) was firstly developed in 
+late 1960s and fully implemented by the Bell Laboratory in 1990s for classification tasks. It has been later
+used for regression tasks as well. For regression applications, it is also referred as support vector 
+regression (SVR).
+
+The core idea of SVM is to find a hyperplane or a set of hyperplan to best separate different classes in the
+feature space when it was firstly developed for classification. All the boundry points of a class in the 
+feature space is called *support vectors*. You can think the hyperplanes as the equalized position when the 
+support vectors from two different classes are pushing each other in the feature space.  
+
+When SVM was applied to regression (SVR), the core principle still applies. But instead of finding the 
+hyperplanes (or boundaries) to separate data points in SVM, SVR is identifying the boundaries to include 
+as many data points as possible with tolerable error.  
+
+In R, the SVM/SVR can be implemented using the library **kernlab**. We will use the combination of **caret**
+and **kernlab** in this tutorial to implement SVR for our USCRN data.  
+
+To start off, we will build a linear SVR model which do not use the kernal function to account for the 
+nonlinearity in the data. The model tag for this linear SVR model for **caret** is *"svmLinear*.
+
+```{r linear-modelInfo}
+getModelInfo(model = "svmLinear", regex = FALSE)[[1]]
+```
+
+This linear kernal based SVR model has one hyperparameter to tune *"C"* which determins the cost
+during the optimization process. 
+
+```{r linear-training-config}
+## First, define model training control & grid for our hyperparameter training
+paraGrid <- expand.grid(
+    C = c(0.5, 1, 2, 4, 8, 16)
+)
+
+### To specify that we want to do 5-fold CV, we need to use the function trainControl() from *caret*.
+linCtrl <- trainControl(method="cv", number=5, search="grid")
+
+### So now, we are training our linear SVR model using a 5-fold cross validation by searching through 
+### six different cost hyperparameters.
+```
+
+With the defined hyperparameter grid and training configuration (5-fold cross validation), we can now 
+move forward to train our SVR model. Since we have quite different data range for different input
+variables, we will also use pre-processing functionality in caret to reduce the impact.  
+
+```{r linear-training}
+### Using train function to train the linear SVR model
+## target : SOIL_MOISTURE_20_DAILY
+## input  : T_DAILY_AVG, P_DAILY_CALC, SOLARAD_DAILY, SUR_TEMP_DAILY_AVG, RH_DAILY_AVG
+linSVR <- train(SOIL_MOISTURE_20_DAILY ~ T_DAILY_AVG + P_DAILY_CALC + SOLARAD_DAILY + SUR_TEMP_DAILY_AVG + RH_DAILY_AVG,
+                data = trainData, method = "svmLinear", 
+                preProcess = c("center", "scale"),           ## defining the preProcessing steps for the training process
+                tuneGrid = paraGrid,
+                trControl = linCtrl)
+
+### Now we have our linear SVR model
+linSVR
+```
+
+With this first attempt of the linear support vector regression, our training results is not that
+impressive with the coefficient of determination (R^{2}) of 0.29. Let's see how this model will 
+perform on the testing data that we set asside. 
+
+```{r linear-testing}
+### First, we apply the linSVR model to the test data by using function predict()
+linPredicted <- predict(linSVR, newdata = testData)
+
+### Now, we want to calculate the RMSE, R^2, and mean absolute error (MAE) using 
+### postResample() function
+linTesting <- postResample(linPredicted, testData$SOIL_MOISTURE_20_DAILY)
+
+linTesting
+```
+
+The testing results are similar from the model training outcome. Let's take one step further to
+visualize the outcome of model testing using the scatter plot.  
+
+```{r linear-scatterplot}
+## Generating a scatter plot between the prediction and observation
+plot(x=linPredicted, y=testData$SOIL_MOISTURE_20_DAILY,
+     xlab = "Predicted soil moisture (20 cm) - Linear SVR",
+     ylab = "USCRN soil moisture (20 cm)",
+     xlim = c(0.1,0.4), ylim=c(0.1,0.4))
+```
+
+It looks like there are certain nonlinear pattern in the observed data that was not captured by
+our linear SVM model. As noted earlier, SVM can take advantage of the kernal function to transfer
+data into hyper-space to better charaterize the nonlinearity. So, we will move on to the nonlinear
+kernal for SVM.
+
+## 3 - Developing a kernal function based SVM  
+
+There are a variaty of kernal functions that are commonly used for SVM models, such as polinomial
+and radial basis function (RBF). You can find more kernal functions that library **kernlab**
+supports in this [help document](https://www.rdocumentation.org/packages/kernlab/versions/0.9-29/topics/ksvm).  
+
+Here, we will try both the polinomial function and RBF kernals with **kernlab** and **caret**. In **caret**,
+SVM with RBF kernal is assigned the model tag *"svmRadial"* and SVM with polinomial kernal is assigned
+the model tag *"svmPoly"*. You can check more information about the model using the *getModelInfo()* function
+with corresponding model tags.
+
+### 3.1 - SVM with polynomial kernal  
+
+In *"svmPoly"*, we will need to optimize three model hyperparameters - *C* of the cost by exceeding the
+constraint, *degree* of the polynomial kernal, and "scale" for the polunomial kernal. To the training 
+simple and less computationally demanding, we will keep *C* and *scale* at its default value and
+only changing *degree* since it tends to have the highest impact. So now let's set up our configuration 
+for model training.  
+
+```{r polynomial-training-config}
+## First, define model training control & grid for our hyperparameter training
+paraGrid <- expand.grid(
+    C = 1, ## default value
+    scale = 1, ## default value
+    degree = c(1, 2, 3)
+)
+
+### To specify that we want to do 5-fold CV, we need to use the function trainControl() from *caret*.
+polyCtrl <- trainControl(method="cv", number=5, search="grid")
+
+### So now, we are training our linear SVR model using a 5-fold cross validation by searching through 
+### three different degree hyperparameters.
+```
+
+With the configuration of hyperparameter grids and 5-fold cross validation, we can now train the 
+SVR model with polynomial kernal.  
+
+```{r polynomial-training}
+### Using train function to train the linear SVR model
+## target : SOIL_MOISTURE_20_DAILY
+## input  : T_DAILY_AVG, P_DAILY_CALC, SOLARAD_DAILY, SUR_TEMP_DAILY_AVG, RH_DAILY_AVG
+polySVR <- train(SOIL_MOISTURE_20_DAILY ~ T_DAILY_AVG + P_DAILY_CALC + SOLARAD_DAILY + SUR_TEMP_DAILY_AVG + RH_DAILY_AVG,
+                data = trainData, method = "svmPoly", 
+                preProcess = c("center", "scale"),           ## defining the preProcessing steps for the training process
+                tuneGrid = paraGrid,
+                trControl = polyCtrl)
+
+### Now we have our linear SVR model
+polySVR
+```
+
+From the 5-fold cross validation results, we did see the model performs better in the training data 
+when comparing with the linear SVM model. But we can only confidently say that after evaluating the
+model against the testing data.  
+
+```{r polynomial-testing}
+### First, we apply the linSVR model to the test data by using function predict()
+polyPredicted <- predict(polySVR, newdata = testData)
+
+### Now, we want to calculate the RMSE, R^2, and mean absolute error (MAE) using 
+### postResample() function
+polyTesting <- postResample(polyPredicted, testData$SOIL_MOISTURE_20_DAILY)
+
+polyTesting
+```
+
+From this evaluation, we see that the SVR model with the polynomial kernal actually performs
+worth than the linear SVR model. This gives an indication of the overfitting in the model
+training process since it selected the highest degree for the polynomial kernal which may
+have lead to model overtly customized to capture the training data pattern. 
+
+### 3.2 - SVM with radial basis function kernal 
+
+In *"svmRadial"*, we will need to optimize three model hyperparameters - *C* of the cost by exceeding the
+constraint, *sigma* of the nverse kernel width for radial basis function kernal. To the training 
+simple and less computationally demanding, we will keep *C* at its default value and only changing 
+*sigma* since it tends to have the highest impact. So now let's set up our configuration for training.  
+
+```{r radial-training-config}
+## First, define model training control & grid for our hyperparameter training
+paraGrid <- expand.grid(
+    C = 1, ## default value
+    sigma = c(0.1, 0.5, 1, 2)
+)
+
+### To specify that we want to do 5-fold CV, we need to use the function trainControl() from *caret*.
+rbfCtrl <- trainControl(method="cv", number=5, search="grid")
+
+### So now, we are training our linear SVR model using a 5-fold cross validation by searching through 
+### three different degree hyperparameters.
+```
+
+With the configuration of hyperparameter grids and 5-fold cross validation, we can now train the 
+SVR model with RBF kernal.  
+
+```{r radial-training}
+### Using train function to train the linear SVR model
+## target : SOIL_MOISTURE_20_DAILY
+## input  : T_DAILY_AVG, P_DAILY_CALC, SOLARAD_DAILY, SUR_TEMP_DAILY_AVG, RH_DAILY_AVG
+rbfSVR <- train(SOIL_MOISTURE_20_DAILY ~ T_DAILY_AVG + P_DAILY_CALC + SOLARAD_DAILY + SUR_TEMP_DAILY_AVG + RH_DAILY_AVG,
+                data = trainData, method = "svmRadial", 
+                preProcess = c("center", "scale"),           ## defining the preProcessing steps for the training process
+                tuneGrid = paraGrid,
+                trControl = rbfCtrl)
+
+### Now we have our linear SVR model
+rbfSVR
+```
+
+From the 5-fold cross validation results, we did see the model performs better in the training data 
+when comparing with the linear SVM model. But we can only confidently say that after evaluating the
+model against the testing data.  
+
+```{r radial-testing}
+### First, we apply the linSVR model to the test data by using function predict()
+rbfPredicted <- predict(rbfSVR, newdata = testData)
+
+### Now, we want to calculate the RMSE, R^2, and mean absolute error (MAE) using 
+### postResample() function
+rbfTesting <- postResample(rbfPredicted, testData$SOIL_MOISTURE_20_DAILY)
+
+rbfTesting
+```
+
+Now, we can compare the model outcome from three SVM models with different kernals - linear, 
+polynomial, and radial basis function. 
+
+```{r model-comparison}
+### combine the metrics together in a data frame
+testingMetric <- data.frame(Linear = linTesting, 
+                            Polynomial = polyTesting,
+                            Radial = rbfTesting)
+
+testingMetric %>% knitr::kable()
+```
+
+From this comparison metric, we can see that using nonlinear kernal function did not improve the 
+model performance by our intention to capture the data nonlinearity. What may be the reason for
+this? One question we need to ask is that do we use the best variable for this model to estimate 
+soil moisture data? Also, do we need to consider other information such as the temporal auto-
+correlation because soil has memory. We will improve the model following this thought in the future
+notebooks.
+
+## Extra exercise  
+
+As we mentioned in previous training, most of the machine leanring models that we introduced before
+can also be used for regression applications. Now, can you apply a model from previous trainings,
+such as XGBoost or random forest to the USCRN data? This is a bonus exercise if you finish the contents
+above.  
+
+```{r extra-exe}
+#### We have all the data ready and the formula ready
+#### The only thing you need to think about and adjust is the library that you need for different models
+#### as well as what hyperparameters that you want to tune.
+
+#### Can you implement a xgboost model here?
+
+
+#### How about a random forest model?
+
+
+```
