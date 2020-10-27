@@ -1,0 +1,357 @@
+---
+title: "NCICS Machine Learning Tutorial - E10 (Reference)"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, 
+the results appear beneath the code. You can execute each chunk of code by clicking the *Run* button within 
+the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.
+
+## Introduction  
+
+### Session purpose
+In this session, we are introducing gaussian processes for regression applications (GPR). Before diving 
+into details about GPR, you should know that gaussian process can also be used for classification 
+applications with the same procedure of GPR.
+
+### Learning outcome
+After going through this tutorial, you will be able to
+
+1. Handle a tabular dataset with missing values for regression applications;
+2. Implement support vector machine for regression applications;
+3. Understand the concept of kernal transformation in SVM.
+
+## 1 - Review the data  
+
+```{r load-library}
+library(kernlab); library(caret)
+library(dplyr); library(magrittr); 
+library(ggplot2); library(GGally)
+```
+
+We are using the quality controlled daily station observations from US Climate Reference Network (USCRN). 
+In this notebook, we will use the data of Asheville station with nearly 20 years of data. First, let's read 
+in the data from the CSV (comma separated variable) file from [our repository](https://github.com/geo-yrao/ML4ES-tutorials/tree/master/00-Data/USCRN-data).
+
+```{r read-in-uscrn, warning = FALSE, error = FALSE}
+## Define the file name of the CSV file
+fname <- "https://raw.githubusercontent.com/geo-yrao/ML4ES-tutorials/master/00-Data/USCRN-data/USCRN-NC_Asheville_8_SSW_2010-2019.csv"
+
+## Read in the RAW daily data
+RawData <- read.csv(fname)
+
+## Check the column names of the tabular data
+print ( colnames(RawData) )
+```
+
+From the column names, we see that there are 28 different variables in this tabular data.
+What does each column means? It is all documented in the [readme file](https://github.com/geo-yrao/ML4ES-tutorials/blob/master/00-Data/USCRN-data/USCRN_Daily_Data_readme.txt).
+
+* _**WBANNO**_: The station WBAN number.
+* _**LST_DATE**_: The Local Standard Time (LST) date of the observation (YYYYMMDD).
+* _**CRX_VN**_: The version number of the station datalogger program.
+* _**LONGITUDE**_: Station longitude, using WGS-84 (unit: decimal_degrees_east).
+* _**LATITUDE**_: Station latitude, using WGS-84 (unit: decimal_degrees_north).
+* _**T_DAILY_MAX**_: Maximum air temperature (unit: Celsius).
+* _**T_DAILY_MIN**_: Minimum air temperature (unit: Celsius).
+* _**T_DAILY_MEAN**_: Mean air temperature calculated using maximum and minimum temperature (unit: Celsius).
+* _**T_DAILY_AVG**_: Average air temperature calculated using sub-hourly temperature (unit: Celsius).
+* _**P_DAILY_CALC**_: Total amount of precipitation (unit: mm).
+* _**SOLARAD_DAILY**_: Total solar energy (unit: MJ/m^2^).
+* _**SUR_TEMP_DAILY_TYPE**_: Type of infrared surface temperature measurement.
+* _**SUR_TEMP_DAILY_MAX**_: Maximum infrared surface temperature(unit: Celsius).
+* _**SUR_TEMP_DAILY_MIN**_: Minimum infrared surface temperature (unit: Celsius).
+* _**SUR_TEMP_DAILY_AVG**_: Average infrared surface temperature (unit: Celsius).
+* _**RH_DAILY_MAX**_: Maximum relative humidity (unit: %).
+* _**RH_DAILY_MIN**_: Minimum relative humidity (unit: %).
+* _**RH_DAILY_AVG**_: Average relative humidity (unit: %).
+* _**SOIL_MOISTURE_5_DAILY**_: Average soil moisture at 5 cm below the surface (unit: m^3^/m^3^).
+* _**SOIL_MOISTURE_10_DAILY**_: Average soil moisture at 10 cm below the surface (unit: m^3^/m^3^).
+* _**SOIL_MOISTURE_20_DAILY**_: Average soil moisture at 20 cm below the surface (unit: m^3^/m^3^).
+* _**SOIL_MOISTURE_50_DAILY**_: Average soil moisture at 50 cm below the surface (unit: m^3^/m^3^).
+* _**SOIL_MOISTURE_100_DAILY**_: Average soil moisture at 100 cm below the surface (unit: m^3^/m^3^).
+* _**SOIL_TEMP_5_DAILY**_: Average soil temperature at 5 cm below the surface (unit: Celsius).
+* _**SOIL_TEMP_10_DAILY**_: Average soil temperature at 10 cm below the surface (unit: Celsius).
+* _**SOIL_TEMP_20_DAILY**_: Average soil temperature at 20 cm below the surface (unit: Celsius).
+* _**SOIL_TEMP_50_DAILY**_: Average soil temperature at 50 cm below the surface (unit: Celsius).
+* _**SOIL_TEMP_100_DAILY**_: Average soil temperature at 100 cm below the surface (unit: Celsius).
+
+In this notebook, we focus on the problem of estimating the average soil moisture at 10 cm below the 
+surface (_**SOIL_MOISTURE_10_DAILY**_) using other meteorological variables. To keep the model simple,
+we just use the daily average (or total) of air temperature, precipitation, solar energy, surface 
+temperature, and relative humidity as the model input. Therefore, we need to simplify our current 
+tabular data to only keep necessary variables.  
+
+```{r slim-data, warning=FALSE, error=FALSE}
+### we only keep part of the variables for the application.
+## In addition to the input variables, we kept date to help us separate the data for training/testing
+SlimData <- RawData %>% select ( c(2, 9, 10, 11, 15, 18, 20) )
+
+## Change coloum names for simple display purpose
+colnames(SlimData) <- c("Date", "T2m", "Precip", "Solar", "Tskin", "RH", "SM_10cm")
+
+## Check the first & last 10 rows of the data
+head(SlimData, 10) 
+tail(SlimData, 10)
+```
+
+
+```{r lag-data-generate}
+SlimData$SM_10cm_lead <-  lag(SlimData$SM_10cm, n=1)
+str(SlimData)
+```
+
+We can see that there are missing values in both the independent variables and dependent variables in the 
+current data set. Let's see how many missing values exist in the current data set.  
+
+```{r check-missing}
+## Summarize the missing value
+missingSum <- SlimData %>% 
+  select_if(function(x) any(is.na(x))) %>%           ## Check if the column contains missing value
+  summarise_all(funs(sum(is.na(.)/length(.)*100)))   ## if so, then count what percent of the data is missing
+
+print("Percentage of missing values in each variable")
+missingSum %>% knitr::kable()
+```
+
+It appears that there is ~20% of data records has missing value for the soil moisture. To proceed with 
+model development, we will only keep the complete daily data records in this notebook. In the future, 
+we will introduce how to impute missing values for more complex model development.  
+
+```{r filter-missing}
+CleanData <- SlimData %>% filter(!is.na(T2m), !is.na(Precip),
+                                 !is.na(Solar), !is.na(Tskin),
+                                 !is.na(RH), !is.na(SM_10cm), !is.na(SM_10cm_lead))
+
+str(CleanData)
+```
+
+Before we implement model development, we want to check the relationship between our variables.
+We can examine the correlation between our variables pairwise except the date using function
+*"ggpairs()"*.
+
+```{r pair-wise-plot}
+ggpairs(CleanData, columns = c(2:8),
+        lower = list(continuous = wrap("points", alpha = 0.2, size=0.2)))
+```
+
+Right now, the *Date* variable is in the format of integer. We need to transform it into the 
+specific format for datetime in R so we can perform time based filtering for training/testing data 
+spliting.  
+
+```{r format-date}
+## Convert data type for LST_DATE to Date in R following the format "YYYY-MM-DD"
+CleanData$Date <- as.Date(as.character(CleanData$Date), format="%Y%m%d")
+str(CleanData)
+
+## You will see the data type for LST_DATE has been changed into "Date"
+## with this data type, we can easily filter data by observation date for train/test data spliting
+
+## Let's use the data between 2010 and 2014 (5 years) for training our model
+## then, use the data after 2015 for model evaluation
+trainData <- CleanData %>% filter(Date <= "2014-12-31"); dim(trainData)
+testData  <- CleanData %>% filter(Date >= "2015-01-01"); dim(testData)
+```
+
+We now have two different data sets for model development (*trainData*) and model evaluation (*testData*)
+seperately.
+
+**Cautionary note**: when we split the data into two based on year, there is the underlying assumption 
+that we believe the *trainData* (2010-2014) comes from the same statistical distribution with the *testData*
+(2015-2019). In other words, the dataset used for model development could mostly represent the scenarios
+that may appear in the dataset for model evaluation. But if there are future extreme events that is beyond the
+range of *trainData*, we need to treat the prediction carefully since it could have large uncertainties.  
+
+## 2 - Building a gaussian process regression model  
+
+We are now moving on to develop the GPR model to estimate daily soil moisture at 10 cm using daily
+meteorological variables from USCRN station in Asheville.
+
+In R, the GPR can be implemented using the library **kernlab**. We will use the combination of **caret**
+and **kernlab** in this tutorial to implement GPR for our USCRN data.  
+
+The GPR model relies on the kernal function to estimate the covariance matrix. In this tutorial, we will
+use the radial basis function (RBF) as an example. In **caret** packege, the RBF-kernal GPR model is using 
+the model tag of *"gaussRadial"*. To examine the model information from **caret**, we can use *getModelInfo()*.
+
+```{r linear-modelInfo}
+getModelInfo(model = "gaussprRadial", regex = FALSE)[[1]]
+```
+
+From the model information, this RBF kernal based GPR model has only one hyperparameter *"sigma"* 
+to be tuned which determins the smoothness of the covirance. 
+
+First of all, we need to scale all data to avoid that some large magnitute variables may dominate 
+the model performance.
+
+```{r data-preprocess}
+## we will use preProcess function to do the scaling
+## Also, we are not scaling the date for the data
+preProc <- preProcess(trainData[,2:8], method = c("center", "scale"))
+
+## Now, we apply the preprocessing steps to both training data and testing data
+trainScaled <- predict(preProc, newdata=trainData)
+testScaled  <- predict(preProc, newdata=testData)
+```
+
+With the scaled data, now we can define the grid search space for our hyperparameter search. Also, we
+will keep using the 5-fold cross validation for our hyperparameter search.
+
+```{r rbf-training-config}
+## First, define model training control & grid for our hyperparameter training
+paraGrid <- expand.grid(
+    sigma = c(0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28)
+)
+
+### To specify that we want to do 5-fold CV, we need to use the function trainControl() from *caret*.
+trCtrl <- trainControl(method="cv", number=5, search="grid")
+```
+
+So now, we are training our R model using a 5-fold cross validation by searching through eight different 
+sigma values.
+
+With the defined hyperparameter grid and training configuration (5-fold cross validation), we can now 
+move forward to train our GPR model. 
+
+From our last SVR tutorial, we have concluded the temporal autocorrelation may help improve our model
+performance. This is supported by our pairwise scatter plot as well. So our model will include the 
+soil moisture data from previous data as an input to account for the "memory" in the soil.
+
+```{r rbf-training}
+### Using train function to train the linear SVR model
+## target : Soil Moisture at 10 cm SM_10cm
+## input  : T2m, Precip, Solar, Tskin, RH, SM_10cm from previous day
+rbfGPR <- train(SM_10cm ~ T2m + Precip + Solar + Tskin + RH + SM_10cm_lead,
+                data = trainScaled, method = "gaussprRadial", 
+                tuneGrid = paraGrid,
+                trControl = trCtrl,
+                variance.model = TRUE)
+
+### Now we have our RBF GPR model with the optimized hyperparameter
+rbfGPR
+```
+
+With this gaussian process regression by accounting for the "memory" from previous day, 
+our model achieves the coefficient of determination (R^{2}) of 0.95. Let's see how this model will 
+perform on the testing data that we set asside. 
+
+```{r rbf-testing}
+### First, we apply the model to the test data by using function predict()
+rbfPredicted <- predict(rbfGPR, newdata = testScaled)
+
+### Now, we want to calculate the RMSE, R^2, and mean absolute error (MAE) using 
+### postResample() function
+rbfTesting <- postResample(rbfPredicted, testScaled$SM_10cm)
+
+rbfTesting
+```
+
+The GPR model estimation shows a very good performance with R^{2} reaching 0.96 and RMSE of 0.25 for 
+the scaled soil moisture value.  
+
+Now, we can visualize our model performance by ploting the true value and the estimation against the 
+date.
+
+
+```{r vis-results}
+## Define the result data frame first for ggplot
+result <- data.frame(Date = testScaled$Date, 
+                     Scaled_USCRN_SM_10cm = testScaled$SM_10cm,
+                     Scaled_GPR_SM_10cm = rbfPredicted)
+
+## Note that all values are scaled values in the preProcessing step
+ggplot(aes(x=Date), data=result) +
+    geom_point(aes(y=Scaled_USCRN_SM_10cm), color = "royalblue", pch=21) +
+    geom_point(aes(y=Scaled_GPR_SM_10cm), color = "black", pch=21) +
+    theme_bw() + labs(x = "Date", y = "Scaled Soil Moisture at 10 cm")
+```
+From the plot, we see that the estimated soil mositure data at 10 cm follows similar temporal
+pattern with the observed values.
+
+One of the great advantage of GPR is that it can generate uncertainty measure. So how can we
+visualize the uncertainty of our estimation? Fortunately, **lernlab** allow you to produce 
+the uncertainty of the estimated value using *predict()* function by specifying the keyword 
+*type = "sdeviation"*.  
+
+```{r rbf-uncertainty}
+### First we extracting the final GPR model from our 5-fold CV
+gprModel <- rbfGPR$finalModel
+
+### Now, we will use the kernlab::predict function to get the uncertainty output
+rbfUncertainty <- kernlab::predict(gprModel, testScaled[,c(2:6,8)], type="sdeviation")
+```
+
+This uncertainty measure is assoiciated with each test data points we have. We can't
+visualize it like the theoretical GPR analysis since our model is a multivariate model.
+But we can present the uncertainty for associated estimation.  
+
+```{r linear-scatterplot}
+## Assign the uncertainty vector into our result data frame
+result$uncertainty = rbfUncertainty
+
+## Visualize the uncertainty using an error bar
+## Note that all values are scaled values in the preProcessing step
+ggplot(aes(x=Date), data=result) +
+    geom_point(aes(y=Scaled_GPR_SM_10cm), color = "black", pch=21) +
+    geom_errorbar(aes(ymin=Scaled_GPR_SM_10cm-uncertainty, 
+                      ymax=Scaled_GPR_SM_10cm+uncertainty)) +
+    theme_bw() + labs(x = "Date", y = "Scaled Soil Moisture at 10 cm")
+
+## To better examine the uncertainty we further zoom into one year (2015) 
+## using the limit function in ggplot
+ggplot(aes(x=Date), data=result) +
+    geom_point(aes(y=Scaled_GPR_SM_10cm), color = "black", pch=21) +
+    geom_errorbar(aes(ymin=Scaled_GPR_SM_10cm-uncertainty, 
+                      ymax=Scaled_GPR_SM_10cm+uncertainty)) +
+    theme_bw() + labs(x = "Date", y = "Scaled Soil Moisture at 10 cm") +
+    scale_x_date(limits=c(as.Date("2015-01-01"), as.Date("2015-12-31")))
+   
+```
+
+As you can see, the associated uncertainty can be a good indicator for further application 
+of this model output because it informs the user how confident we are about the model output.
+This is the most powerful part of the GPR model.  
+
+Now, you might say we are "cheating" to use the soil moisture data from previous day as the
+first guess for this model. So it is really easy to get the model right. Can you build a model
+that do not rely on the soil moisture data from previous days?
+
+## Exercise 1
+Now, it's your turn to do some exercise! Can you try to build a model adding day of year as 
+a model input but do not use the soil moisture from previous data to build a GPR model?
+
+
+```{r exe-1}
+#### We have all the data ready and the formula ready
+#### The only thing you need to think about and adjust is the changing the model input
+#### as well as what hyperparameters that you want to tune.
+
+#### Can you implement your GPR model here?
+
+
+#### How about this model compared to the previous model we developed?
+
+
+```
+
+## Exercise 2
+Can you change the kernal for the GPR model? How about let's try a model with a linear
+kearnal?
+
+```{r exe-2}
+#### We have all the data ready and the formula ready
+#### The only thing you need to think about and adjust is the changing the model tag
+#### to represent a linear kernal GPR model
+
+#### Can you implement your GPR model here?
+
+
+#### How about this model compared to the previous model we developed?
+
+
+```
