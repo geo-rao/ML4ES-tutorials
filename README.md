@@ -9,4 +9,4 @@ This is the tutorials repo for Machine Learning for Earth Sciences (ML4ES) for N
 
 Using the notebook in RStudio: [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/geo-yrao/ML4ES-sandbox/main?urlpath=git-pull?repo=https%3A%2F%2Fgithub.com%2Fgeo-yrao%2FML4ES-tutorials%26urlpath%3Drstudio)
 
-Using the notebook in Jupyter+R: [![Binder](https://mybinder.org/v2/gh/geo-yrao/ML4ES-sandbox/main?urlpath=git-pull?repo=https%3A%2F%2Fgithub.com%2Fgeo-yrao%2FML4ES-tutorials)
+Using the notebook in Jupyter+R: [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/geo-yrao/ML4ES-sandbox/main?urlpath=git-pull?repo=https%3A%2F%2Fgithub.com%2Fgeo-yrao%2FML4ES-tutorials)
