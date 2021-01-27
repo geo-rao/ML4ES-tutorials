@@ -1,0 +1,344 @@
+---
+title: "NCICS ML training Tutorials E12 - Hyperparameter Tuning"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    toc: yes
+---
+
+This [R Markdown](http://rmarkdown.rstudio.com) notebook demonstrate three different hyperparameter tuning techniques,  
+
+  * Grid Search
+  * Random Search
+  * Bayesian Optimization
+  
+To better demonstrate the performance of three different techniques, we will use simulated data instead of real world data
+since we know the distribution of simulated data so it can help us compare the final results.  
+
+The simulated data is generated using a regression simulation system described in [Sapp et al. 2014](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4000126/). 
+
+$$y=\epsilon + x_1 + \sin(x_2) + \log(|x_3|) + x_4^2 + x_5 x_6 + I(x_7 x_8 x_9 < 0) + I(x_{10}>0) + I(x_{11} > 0) 
+   \\+ \sqrt {|x_{12}|} + \cos(x_{13}) + 2x_{14} + |x_{15}| + I(x_{16}<-1) + x_{17}I(x_{17}<-1) - 2x_{18} - x_{19}x_{20}$$
+
+This simulation system uses 20 independent Gaussian random variables with zero mean and a variance of nine 
+(i.e., $x_{i} \sim N(0,9)$). The random error here is also Gaussian with zero mean and a variance of nine
+(i.e., $\epsilon \sim N(0,9)$).
+
+The simulated data is generated using the built-in `SLC14_1` function from the package `caret`. More information about 
+the function can be found in this [R Documentation page](https://www.rdocumentation.org/packages/caret/versions/6.0-78/topics/SLC14_1).
+
+```{r simulation}
+library(caret)
+library(tidyverse)
+## Setting seed number for reproducible results
+set.seed(7210)
+## Get training data
+train_data <- SLC14_1(250)
+large_data <- SLC14_1(1000)
+```
+
+We will use a radial basis function (RBF) support vector machine (SVM) to model the simulated data. For a fixed `epsilon` 
+in the SVM model, the model will be tuned over the `cost` value and the radial basis kernel parameter, or `sigma`. Since 
+we are simulating the data, we can figure out a good approximation to the relationship between these parameters and the 
+root mean squared error (RMSE) of the model. Given our specific training set and the larger simulated sample, here is the
+RMSE surface for a wide range of values:
+
+![Figure 1. True RMSE surface](https://revolution-computing.typepad.com/.a/6a010534b1db25970b01b8d1f3992b970c-pi).
+
+There is a wide range of parameter values that are associated with very low RMSE values in the upleft corner of the surface.
+
+## Random Search
+
+A simple way to get an initial assessment is to use random search where a set of random tuning parameter values are generated
+across a “wide range”. For a RBF SVM, `caret`’s `train` function defines wide as `cost` values between `2^c(-5, 10)` and `sigma` 
+values inside the range produced by the `sigest` function in the `kernlab` package. This code will do 20 random sub-models in
+this range:
+
+```{r rand_search}
+## Define the trainControl with repeated cross validations with random search
+random_ctrl <- trainControl(method = "repeatedcv", repeats = 3,
+                            search = "random")
+## Set seed number to make sure the results are reproducible 
+set.seed(308) 
+## Perform training of a SVM model with RFG kernal with 20 random hyperparameters
+## by specificying the "tuneLength" keyword.
+random_search <- caret::train(y ~ ., data = train_data,
+                            method = "svmRadial",
+                            ## Create 20 random parameter values
+                            tuneLength = 20,
+                            metric = "RMSE",
+                            preProc = c("center", "scale"),
+                            trControl = random_ctrl)
+## Examine the training SVM model performance with different hyperparameters
+random_search
+```
+
+Now that we have the random search results, we have a rough idea of how the model performs in the hyperparameter
+space that we randomly sampled (i.e., the bottom right corner of the entire space). 
+```{r vis-random, fig.asp=1}
+## Generating the RMSE plots using the two hyperparameters as the x (sigma) and y (Cost) axis.
+random_search$results %>% ggplot(aes(sigma, C)) +
+    geom_point(aes(size = RMSE), shape = 21, alpha = 0.5) + 
+    coord_cartesian(ylim = c(10^(-3),10^8.5), xlim = c(10^(-3.5),10^(-0.5)), expand = F) +
+    scale_x_log10(breaks = 10^(seq(-4,0,1))) + 
+    scale_y_log10(breaks = 10^(seq(-3,9,1))) + 
+    scale_size_continuous(breaks = seq(8,20,2), limits = c(8,20)) + 
+    labs(x = expression(sigma), y = "Cost", parse=T, title = "Random Search (length=20)") +
+    theme_bw() +
+    theme(panel.grid = element_blank(), text = element_text(size = 14))
+```
+
+```{r}
+## We can further look at the final model from the random search and its best model
+## hyperparameters
+print("======================")
+print("Best (C. sigma) based on random search is: ")
+print(random_search$bestTune)
+print("======================")
+getTrainPerf(random_search)
+```
+
+From the scatter plot, we see that random search is not the most efficient way of tuning the hyperparameter,
+especially when there is a very wide range of possible combinations. This problem can be extremely challenging
+for more complex models (e.g., deep learning models) with nearly a half dozen hyperparameters need to be pre-
+determined by us. But random search can give us a starting point as an initial guess.
+
+Now with the random search restulst, we naively assume that the optimum hyperparameter combination may appear 
+in the center region in the hyperparameter space. What should we do next?  
+
+## Grid Search
+
+We can try to refine our search in the "suspect" optimal hyperparameter space with a fine grid to make sure we
+can get close to the optimal combination under our assumption (that the optimal values exist in this narrow 
+region). 
+
+```{r grid-search}
+## Define the hyperparameter grid within a narrower range
+parameter_grid <- expand.grid(C = 10^(seq(1,3,0.25)),
+                              sigma = 10^(seq(-2.5,-1.5,0.2)))
+## There are totally 54 different combinations of C & sigma for the RBF SVM model
+sprintf("Totoal number of hyperparameter combinations: %d", nrow(parameter_grid))
+
+## Define the trainControl for grid search with the same repeated CV
+grid_ctrl <- trainControl(method = "repeatedcv", repeats = 3,
+                          search = "grid")
+
+## Set seed number to make sure the results are reproducible 
+set.seed(308) 
+## Perform training of a SVM model with RFG kernal with 20 random hyperparameters
+## by specificying the "tuneLength" keyword.
+grid_search <- caret::train(y ~ ., data = train_data,
+                            method = "svmRadial",
+                            ## using the predefined parameter grid
+                            tuneGrid = parameter_grid,
+                            metric = "RMSE",
+                            preProc = c("center", "scale"),
+                            trControl = grid_ctrl)
+## Examine the training SVM model performance with different hyperparameters
+grid_search
+```
+
+We can put this results into the perspective by comparing with our random search results.
+
+```{r compare-random-grid, fig.asp=1}
+## Generating the RMSE plots using the two hyperparameters as the x (sigma) and y (Cost) axis.
+## adding blue points for grid search
+ggplot() + 
+    ## identify the grid on the hyperparameter space
+    annotate("segment", y = 10^(seq(1,3,0.25)), yend = 10^(seq(1,3,0.25)), 
+             x = 10^(-2.5), xend = 10^(-1.5), color = "grey50", alpha=0.5, linetype = 2) +
+    annotate("segment", y = 10, yend = 10^3, x = 10^(seq(-2.5,-1.5,0.2)), 
+             xend = 10^(seq(-2.5,-1.5,0.2)), color = "grey50", alpha=0.5, linetype = 2) +
+    ## Plot scatter plot for random search
+    geom_point(aes(sigma, C, size = RMSE), shape = 21, alpha = 0.5, data = random_search$results) +
+    annotate("text", x = 10^(-0.6), y = 10^8, label = "Random search", color = "grey50", size = 6, hjust = 1) +
+    ## Plot scatter plot for grid search with different fill color
+    geom_point(aes(sigma, C, size = RMSE), shape = 21, alpha = 0.5, fill="royalblue", 
+               data = grid_search$results) +
+    annotate("text", x = 10^(-0.6), y = 10^7.5, label = "Grid search", color = "royalblue", size = 6, hjust = 1) +
+    ## Define the coordinate system and other parts of the figure
+    coord_cartesian(ylim = c(10^(-3),10^8.5), xlim = c(10^(-3.5),10^(-0.5)), expand = F) +
+    scale_x_log10(breaks = 10^(seq(-4,0,1))) + 
+    scale_y_log10(breaks = 10^(seq(-3,9,1))) + 
+    scale_size_continuous(breaks = seq(8,20,2), limits = c(8,20)) + 
+    labs(x = expression(sigma), y = "Cost", parse = T, title = "Random Search v.s. Grid Search") +
+    theme_bw() +
+    theme(panel.grid = element_blank(), text = element_text(size = 14))
+```
+
+From the above plot, we see slight improvements of the training results of the grid search. Assuming that we
+have enough computational power and we can search through the entire hyperparameter space with fine grid, we
+could potentially find the most appropriate hyperparameter. But as you have imagined, it will be very costly
+for model training. This is when **Bayesian Optimization** comes to rescue. 
+
+## Bayesian Optimization  
+
+Bayesian Optimization is an optimization scheme that uses Bayesian models based on Gaussian processes to 
+predict good tuning parameters. More specifically, we can create a regression model to formalize the 
+relationship between the outcome (RMSE, in this notebook) and the SVM tuning parameters(i.e., `cost` and 
+`sigma`). The standard assumption regarding normality of the residuals is used and, being a Bayesian model, 
+the regression parameters also gain a prior distribution that is multivariate normal. The Gaussian process  
+model uses a kernel basis expansion (much like the SVM model does) in order to allow the model to be nonlinear
+in the SVM tuning parameters. To do this, a RBF kernel is used for the covariance function of the multivariate
+normal prior and maximum likelihood is used to estimate the kernel parameters of the Gaussian process.
+
+In the end, the  Gaussian process regression model can take the current set of resampled RMSE values and make 
+predictions over the entire space of potential `cost` and `sigma` parameters. The Bayesian theory allows of this 
+prediction to have a distribution; for a given set of tuning parameters, we can obtain the estimated mean RMSE
+values as well as an estimate of the corresponding prediction variance.
+
+To carry out the Bayesian Optimization for our SVM model development, we will take advantage of the R package 
+`rBayesianOptimization` developed by Yachen Yan (see [package information](https://cran.r-project.org/web/packages/rBayesianOptimization/index.html)). 
+In the `rBayesianOptimization` package, we can also use our initial random search as the initial guess to inform our
+first GP fit. 
+
+First of all, we need to define the SVM model to be feed into `rBayesianOptimization`. 
+
+```{r bayes-opt-config}
+## Define the resampling method with the same repeated CV
+ctrl <- trainControl(method = "repeatedcv", repeats = 3)
+ 
+## Use this function to optimize the model. The two parameters are 
+## evaluated on the log scale given their range and scope. 
+svm_fit_bayes <- function(logC, logSigma) {
+  ## Use the same model code but for a single (C, sigma) pair. 
+  txt <- capture.output(
+  mod <- caret::train(y ~ ., data = train_data,
+                 method = "svmRadial",
+                 preProc = c("center", "scale"),
+                 metric = "RMSE",
+                 trControl = ctrl,
+                 tuneGrid = data.frame(C = exp(logC), 
+                                       sigma = exp(logSigma))))
+  ## The optimization function wants to _maximize_ the outcome so we return 
+  ## the negative of the resampled RMSE value. `Pred` can be used
+  ## to return predicted values but we'll avoid that and use zero
+  list(Score = -getTrainPerf(mod)[, "TrainRMSE"], Pred = 0)
+}
+ 
+## Define the bounds of the search. 
+lower_bounds <- c(logC = -5, logSigma = -9)
+upper_bounds <- c(logC = 20, logSigma = -0.75)
+bounds <- list(logC = c(lower_bounds[1], upper_bounds[1]),
+               logSigma = c(lower_bounds[2], upper_bounds[2]))
+```
+
+In order to use our original random search results as the initial guess for the optimization, we will
+first define the initial grid and them start the Bayesian Optimization using function `BayesianOptimization`.  
+
+``` {r bayes-opt}
+## Create a grid of values as the input into the BO code
+initial_grid <- random_search$results[, c("C", "sigma", "RMSE")]
+initial_grid$C <- log(initial_grid$C)
+initial_grid$sigma <- log(initial_grid$sigma)
+initial_grid$RMSE <- -initial_grid$RMSE
+names(initial_grid) <- c("logC", "logSigma", "Value")
+
+## Run the optimization with the initial grid and do
+## 30 iterations. We will choose new parameter values
+## using the upper confidence bound using 1 std. dev. 
+
+library(rBayesianOptimization)
+## Set seed number to ensure reproducible results 
+set.seed(8606)
+ba_search <- BayesianOptimization(svm_fit_bayes,
+                                  bounds = bounds,
+                                  ### need initial grid to kick off the optimization
+                                  ### here we use the random search results
+                                  init_grid_dt = initial_grid, 
+                                  init_points = 0, 
+                                  n_iter = 25,
+                                  ### Choose acquisition function
+                                  ## here we use the expected improvement (EI)
+                                  ## you can change it to others as well
+                                  acq = "ucb", 
+                                  kappa = 1, 
+                                  eps = 0.0,
+                                  verbose = TRUE)
+```
+
+Now, we can add the Bayesian Optmization searched through hyperparameter combination to our
+scatter plot.
+
+```{r bayes-compare, fig.asp=1}
+## Get the information
+bayes_history <- data.frame(
+  C = exp(ba_search$History$logC),
+  sigma = exp(ba_search$History$logSigma),
+  RMSE = - ba_search$History$Value
+)
+
+## Generating the RMSE plots using the two hyperparameters as the x (sigma) and y (Cost) axis.
+## adding blue points for grid search
+ggplot() + 
+    ## identify the grid on the hyperparameter space
+    annotate("segment", y = 10^(seq(1,3,0.25)), yend = 10^(seq(1,3,0.25)), 
+             x = 10^(-2.5), xend = 10^(-1.5), color = "grey50", alpha=0.5, linetype = 2) +
+    annotate("segment", y = 10, yend = 10^3, x = 10^(seq(-2.5,-1.5,0.2)), 
+             xend = 10^(seq(-2.5,-1.5,0.2)), color = "grey50", alpha=0.5, linetype = 2) +
+    ## Plot scatter plot for random search
+    geom_point(aes(sigma, C, size = RMSE), shape = 21, alpha = 0.5, data = random_search$results) +
+    annotate("text", x = 10^(-0.6), y = 10^8, label = "Random search", color = "grey50", size = 6, hjust = 1) +
+    ## Plot scatter plot for grid search with different fill color
+    geom_point(aes(sigma, C, size = RMSE), shape = 21, alpha = 0.5, fill="royalblue", 
+               data = grid_search$results) +
+    annotate("text", x = 10^(-0.6), y = 10^7.5, label = "Grid search", color = "royalblue", size = 6, hjust = 1) +
+    ## Plot scatter plot for grid search with different fill color
+    geom_point(aes(sigma, C, size = RMSE), shape = 21, alpha = 0.5, fill="forestgreen", 
+               data = bayes_history[21:nrow(bayes_history),]) +
+    annotate("text", x = 10^(-0.6), y = 10^7, label = "Bayesian Opt.", color = "forestgreen", size = 6, hjust = 1) +
+    ## Define the coordinate system and other parts of the figure
+    coord_cartesian(ylim = c(10^(-3),10^8.5), xlim = c(10^(-3.5),10^(-0.5)), expand = F) +
+    scale_x_log10(breaks = 10^(seq(-4,0,1))) + 
+    scale_y_log10(breaks = 10^(seq(-3,9,1))) + 
+    scale_size_continuous(breaks = seq(8,20,2), limits = c(8,20)) + 
+    labs(x = expression(sigma), y = "Cost", parse = T, title = "Random v.s. Grid v.s. Bayesian") +
+    theme_bw() +
+    theme(panel.grid = element_blank(), text = element_text(size = 14)) 
+```
+
+The final settings were found with a large `cost` setting and a very small `sigma` data value. We would
+have never thought to evaluate a `cost` parameter so large and the algorithm wants to make it even larger.
+Does it really work?
+
+We can fit a model based on the new configuration and compare it to random search in terms of the resampled
+RMSE and the RMSE on the test set:
+
+```{r final-mod-train}
+set.seed(308)
+bayes_search <- caret::train(y ~ ., data = train_data,
+                      method = "svmRadial",
+                      ## Use the best parameter found in the Bayesian Optimizer
+                      ## for our final SVM model
+                      tuneGrid = data.frame(C = exp(ba_search$Best_Par["logC"]), 
+                                            sigma = exp(ba_search$Best_Par["logSigma"])),
+                      metric = "RMSE",
+                      preProc = c("center", "scale"),
+                      trControl = ctrl)
+```
+
+Let's see the comparison between *random search* and *bayesian optimization*.
+```{r}
+compare_models(bayes_search, random_search)
+```
+
+Same with the *grid search* result!
+```{r}
+compare_models(bayes_search, grid_search)
+```
+
+We can compare the final model from three different parameter tuning strategies using a different dataset for evaluation.  
+
+```{r}
+postResample(predict(random_search, large_data), large_data$y)
+postResample(predict(grid_search, large_data), large_data$y)
+postResample(predict(bayes_search, large_data), large_data$y)
+```
+It appears that the Bayesian Optimization based SVM model outperforms both the random search
+and grid search.
+
+## Exercise
+
+Now we have reviewed how to perform random search, grid search, and Bayesian Optimization for hyperparameter tuning. But we only did it with an simulated data. Now it is your term to apply it to your data and model. You can choose a model we discussed in the past, such as, Neural Network, SVM, random forest, etc. 
